@@ -673,12 +673,32 @@ core::Result<std::string> SoundCloudApi::resolve_stream_url(const models::Track&
 
     // If DRM is allowed and transcoding is still empty, look for DRM-protected transcodings
     if (transcoding_url.empty() && allow_drm) {
+        // First priority: CTR encrypted HLS (Widevine CENC supported by CastLabs Electron on Linux/Windows/Mac)
         for (const auto& t : track.transcodings) {
-            if (t.protocol == "cbc-encrypted-hls" || t.protocol == "ctr-encrypted-hls" ||
-                t.protocol.find("encrypted") != std::string::npos) {
+            if (t.protocol == "ctr-encrypted-hls" || t.url.find("ctr-encrypted-hls") != std::string::npos) {
                 transcoding_url = t.url;
-                LOG_INFO("SoundCloudApi", "Selected DRM encrypted HLS transcoding: " + t.url + " (" + t.protocol + ")");
+                LOG_INFO("SoundCloudApi", "Selected Widevine CTR encrypted HLS transcoding: " + t.url + " (" + t.preset + ")");
                 break;
+            }
+        }
+        // Second priority: CBC encrypted HLS (FairPlay / cbcs)
+        if (transcoding_url.empty()) {
+            for (const auto& t : track.transcodings) {
+                if (t.protocol == "cbc-encrypted-hls" || t.url.find("cbc-encrypted-hls") != std::string::npos) {
+                    transcoding_url = t.url;
+                    LOG_INFO("SoundCloudApi", "Selected CBC encrypted HLS transcoding: " + t.url + " (" + t.preset + ")");
+                    break;
+                }
+            }
+        }
+        // Fallback: any other encrypted transcoding
+        if (transcoding_url.empty()) {
+            for (const auto& t : track.transcodings) {
+                if (t.protocol.find("encrypted") != std::string::npos || t.url.find("encrypted") != std::string::npos) {
+                    transcoding_url = t.url;
+                    LOG_INFO("SoundCloudApi", "Selected general encrypted HLS transcoding: " + t.url);
+                    break;
+                }
             }
         }
     }
@@ -730,7 +750,13 @@ core::Result<std::string> SoundCloudApi::resolve_stream_url(const models::Track&
         auto j = nlohmann::json::parse(resp->body);
         if (j.contains("url") && j["url"].is_string()) {
             std::string resolved = j["url"].get<std::string>();
-            LOG_INFO("SoundCloudApi", "Resolved audio stream URL for track " + std::to_string(track.id) + " ('" + track.title + "')");
+            if (j.contains("licenseAuthToken") && j["licenseAuthToken"].is_string()) {
+                std::string token = j["licenseAuthToken"].get<std::string>();
+                resolved += "#license_token=" + token;
+                LOG_INFO("SoundCloudApi", "Resolved DRM audio stream with Widevine licenseAuthToken for track " + std::to_string(track.id));
+            } else {
+                LOG_INFO("SoundCloudApi", "Resolved audio stream URL for track " + std::to_string(track.id) + " ('" + track.title + "')");
+            }
             return resolved;
         }
     } catch (const std::exception& e) {

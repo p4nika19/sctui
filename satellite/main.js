@@ -3,7 +3,9 @@
  * Powered by @castlabs/electron for Google Widevine CDM + VMP support.
  */
 
-const { app, BrowserWindow, ipcMain } = require('electron');
+const electron = require('electron');
+const { app, BrowserWindow, ipcMain } = electron;
+const components = electron.components;
 const path = require('path');
 const readline = require('readline');
 
@@ -157,7 +159,16 @@ ipcMain.on('player-event', (event, eventObj) => {
 });
 
 // Create headless invisible window when Electron is ready
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
+  if (components) {
+    try {
+      await components.whenReady();
+      logInfo('CastLabs components ready: ' + JSON.stringify(components.status()));
+    } catch (e) {
+      logError('Failed waiting for CastLabs components: ' + e.message);
+    }
+  }
+
   win = new BrowserWindow({
     show: false,
     width: 1,

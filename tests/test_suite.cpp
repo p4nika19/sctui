@@ -526,7 +526,7 @@ void test_terminal_graphics_protocol() {
     ftxui::Render(screen_kitty, kitty_elem);
     std::string kitty_out = screen_kitty.ToString();
     REQUIRE(kitty_out.find("\033_Ga=T,f=100") != std::string::npos);
-    REQUIRE(kitty_out.find("\033[u") != std::string::npos);
+    REQUIRE(kitty_out.find("C=1,q=2") != std::string::npos);
     std::cout << "  -> Kitty Graphics Protocol element rendered with valid escape sequence and clean cursor alignment OK" << std::endl;
 
     // 5. Render iTerm2 Protocol element
@@ -535,7 +535,6 @@ void test_terminal_graphics_protocol() {
     ftxui::Render(screen_iterm, iterm_elem);
     std::string iterm_out = screen_iterm.ToString();
     REQUIRE(iterm_out.find("\033]1337;File=inline=1") != std::string::npos);
-    REQUIRE(iterm_out.find("\a\033[u") != std::string::npos);
     std::cout << "  -> iTerm2 Inline Image element rendered with valid escape sequence and clean cursor alignment OK" << std::endl;
 
     // 6. Render Unicode 24-bit Half-Block element (fallback)

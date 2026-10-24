@@ -12,37 +12,91 @@
 
 namespace sctui::audio {
 
+namespace {
+
+std::filesystem::path resolve_satellite_dir(const std::filesystem::path& user_specified) {
+    if (!user_specified.empty() && std::filesystem::exists(user_specified / "main.js")) {
+        std::error_code ec;
+        auto canon = std::filesystem::canonical(user_specified, ec);
+        return ec ? user_specified : canon;
+    }
+
+    std::vector<std::filesystem::path> candidates;
+
+    // Check relative to current working directory
+    candidates.push_back(std::filesystem::current_path() / "satellite");
+
+    // Check relative to executable (/proc/self/exe on Linux)
+    std::error_code ec;
+    auto exe_path = std::filesystem::read_symlink("/proc/self/exe", ec);
+    if (!ec) {
+        auto dir = exe_path.parent_path();
+        candidates.push_back(dir / "satellite");
+        candidates.push_back(dir / ".." / "satellite");
+        candidates.push_back(dir / ".." / ".." / "satellite");
+        candidates.push_back(dir / ".." / ".." / ".." / "satellite");
+        candidates.push_back(dir / ".." / ".." / ".." / ".." / "satellite");
+    }
+
+    // Check user config directory: ~/.config/soundcloud-tui/satellite
+    const char* home = std::getenv("HOME");
+    if (home && *home) {
+        candidates.push_back(std::filesystem::path(home) / ".config" / "soundcloud-tui" / "satellite");
+    }
+
+    // Check well-known repo dir
+    candidates.push_back("/home/p4nika/projects/cpp/sctui/satellite");
+
+    for (const auto& candidate : candidates) {
+        std::error_code err;
+        if (std::filesystem::exists(candidate / "main.js", err)) {
+            auto canon = std::filesystem::canonical(candidate, err);
+            return err ? candidate : canon;
+        }
+    }
+
+    return user_specified.empty() ? std::filesystem::path("satellite") : user_specified;
+}
+
+} // namespace
+
 DrmSatelliteDaemon::DrmSatelliteDaemon(std::filesystem::path satellite_dir)
-    : satellite_dir_(std::move(satellite_dir)) {}
+    : satellite_dir_(resolve_satellite_dir(satellite_dir)) {}
 
 DrmSatelliteDaemon::~DrmSatelliteDaemon() {
     stop();
 }
 
 std::string DrmSatelliteDaemon::find_executable() const {
-    // 1. Local node_modules castlabs-electron
-    std::filesystem::path local_castlabs = satellite_dir_ / "node_modules" / ".bin" / "castlabs-electron";
-    if (std::filesystem::exists(local_castlabs)) {
-        return local_castlabs.string();
+    // 1. Direct binary in node_modules/electron/dist/electron
+    std::filesystem::path dist_electron = satellite_dir_ / "node_modules" / "electron" / "dist" / "electron";
+    if (std::filesystem::exists(dist_electron)) {
+        return dist_electron.string();
     }
 
-    // 2. Local electron
+    // 2. Local electron wrapper (.bin/electron)
     std::filesystem::path local_electron = satellite_dir_ / "node_modules" / ".bin" / "electron";
     if (std::filesystem::exists(local_electron)) {
         return local_electron.string();
     }
 
-    // 3. System castlabs-electron in PATH
+    // 3. Local castlabs-electron
+    std::filesystem::path local_castlabs = satellite_dir_ / "node_modules" / ".bin" / "castlabs-electron";
+    if (std::filesystem::exists(local_castlabs)) {
+        return local_castlabs.string();
+    }
+
+    // 4. System castlabs-electron in PATH
     if (::system("which castlabs-electron >/dev/null 2>&1") == 0) {
         return "castlabs-electron";
     }
 
-    // 4. System electron in PATH
+    // 5. System electron in PATH
     if (::system("which electron >/dev/null 2>&1") == 0) {
         return "electron";
     }
 
-    // 5. Fallback: npx
+    // 6. Fallback: npx
     if (::system("which npx >/dev/null 2>&1") == 0) {
         return "npx";
     }
@@ -55,6 +109,7 @@ bool DrmSatelliteDaemon::start() {
         return true;
     }
 
+    satellite_dir_ = resolve_satellite_dir(satellite_dir_);
     std::filesystem::path main_js = satellite_dir_ / "main.js";
     if (!std::filesystem::exists(main_js)) {
         LOG_ERROR("DrmDaemon", "satellite/main.js not found at " + main_js.string());
@@ -99,6 +154,9 @@ bool DrmSatelliteDaemon::start() {
 
         std::string dir_str = satellite_dir_.string();
         std::string main_str = main_js.string();
+
+        // Switch child working directory to satellite_dir_ so all relative assets resolve
+        (void)::chdir(dir_str.c_str());
 
         if (exe == "npx") {
             execlp("npx", "npx", "@castlabs/electron", main_str.c_str(), nullptr);

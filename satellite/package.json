@@ -7,7 +7,7 @@
     "start": "castlabs-electron main.js"
   },
   "dependencies": {
-    "@castlabs/electron": "^31.0.0"
+    "electron": "git+https://github.com/castlabs/electron-releases.git#v44.9.3+wvcus"
   },
   "private": true
 }

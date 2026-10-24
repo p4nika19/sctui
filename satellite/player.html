@@ -3,19 +3,104 @@
 <head>
   <meta charset="utf-8">
   <title>SCTUI DRM Satellite Player</title>
+  <script src="hls.min.js"></script>
 </head>
 <body style="background: black; margin: 0; overflow: hidden;">
   <audio id="audio-elem" preload="auto"></audio>
   <script>
     const audio = document.getElementById('audio-elem');
     let currentTrackId = 0;
+    let hls = null;
+
+    function cleanupHls() {
+      if (hls) {
+        try {
+          hls.destroy();
+        } catch (e) {}
+        hls = null;
+      }
+    }
 
     if (window.sctuiBridge) {
       window.sctuiBridge.onCommand('cmd-play', (payload) => {
         try {
+          cleanupHls();
           currentTrackId = payload.track_id || 0;
-          if (payload.stream_url) {
-            audio.src = payload.stream_url;
+
+          let streamUrl = payload.stream_url || '';
+          let licenseToken = payload.license_token || '';
+
+          if (streamUrl.includes('#license_token=')) {
+            const parts = streamUrl.split('#license_token=');
+            streamUrl = parts[0];
+            if (!licenseToken && parts[1]) {
+              licenseToken = decodeURIComponent(parts[1]);
+            }
+          }
+
+          if (!streamUrl) {
+            window.sctuiBridge.sendEvent({ type: 'error', message: 'No stream_url provided' });
+            return;
+          }
+
+          const isHls = streamUrl.includes('.m3u8') || streamUrl.includes('/hls') || streamUrl.includes('/cbcs') || streamUrl.includes('/cenc');
+
+          if (isHls && window.Hls && window.Hls.isSupported()) {
+            const hlsConfig = {
+              enableWorker: true,
+              emeEnabled: true,
+              widevineLicenseUrl: 'https://license.media-streaming.soundcloud.cloud/playback/widevine',
+              drmSystems: {
+                'com.widevine.alpha': {
+                  licenseUrl: 'https://license.media-streaming.soundcloud.cloud/playback/widevine',
+                  headers: licenseToken ? { 'Authorization': 'Bearer ' + licenseToken } : {}
+                }
+              },
+              licenseXhrSetup: function(xhr, url, keySystem) {
+                if (licenseToken) {
+                  xhr.setRequestHeader('Authorization', 'Bearer ' + licenseToken);
+                }
+              }
+            };
+
+            hls = new window.Hls(hlsConfig);
+            hls.loadSource(streamUrl);
+            hls.attachMedia(audio);
+
+            hls.on(window.Hls.Events.MANIFEST_PARSED, () => {
+              const playPromise = audio.play();
+              if (playPromise !== undefined) {
+                playPromise.catch((err) => {
+                  window.sctuiBridge.sendEvent({
+                    type: 'error',
+                    message: err ? err.message : 'Audio play() rejected'
+                  });
+                });
+              }
+            });
+
+            hls.on(window.Hls.Events.ERROR, (event, data) => {
+              if (data && data.fatal) {
+                window.sctuiBridge.sendEvent({
+                  type: 'error',
+                  message: 'HLS fatal error: ' + data.type + ' (' + data.details + ')'
+                });
+                switch (data.type) {
+                  case window.Hls.ErrorTypes.NETWORK_ERROR:
+                    hls.startLoad();
+                    break;
+                  case window.Hls.ErrorTypes.MEDIA_ERROR:
+                    hls.recoverMediaError();
+                    break;
+                  default:
+                    cleanupHls();
+                    break;
+                }
+              }
+            });
+          } else {
+            // Direct playback for progressive / raw streams
+            audio.src = streamUrl;
             audio.currentTime = 0;
             const playPromise = audio.play();
             if (playPromise !== undefined) {
@@ -58,6 +143,7 @@
 
       window.sctuiBridge.onCommand('cmd-stop', () => {
         try {
+          cleanupHls();
           audio.pause();
           audio.src = '';
           window.sctuiBridge.sendEvent({
