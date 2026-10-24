@@ -37,6 +37,7 @@ public:
     void reload_from_config();
     void select_field(int field_idx);
     bool handle_mouse_click(int y, int x);
+    bool is_editing_text() const;
 
 private:
     models::AppState& state_;
@@ -59,6 +60,9 @@ private:
     std::string doh_url_input_;
     std::string custom_dns_input_;
     std::string proxy_url_input_;
+    int doh_cursor_pos_{0};
+    int dns_cursor_pos_{0};
+    int proxy_cursor_pos_{0};
     size_t max_cache_size_mb_{1024};
     bool lock_liked_tracks_in_cache_{true};
     bool dont_count_liked_in_general_cache_{false};

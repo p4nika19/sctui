@@ -59,13 +59,116 @@ SettingsView::SettingsView(
 
         constexpr int kTotalFields = 19;
 
+        // Dedicated text editing mode for URL / IP text input fields
+        if (is_editing_text()) {
+            if (event == Event::Escape) {
+                state_.focused_panel = models::FocusPanel::Sidebar;
+                return true;
+            }
+            if (event == Event::Tab || event == Event::ArrowDown || event == Event::Return) {
+                selected_field_ = (selected_field_ + 1) % kTotalFields;
+                if (selected_field_ == 6) doh_cursor_pos_ = static_cast<int>(doh_url_input_.size());
+                if (selected_field_ == 7) proxy_cursor_pos_ = static_cast<int>(proxy_url_input_.size());
+                return true;
+            }
+            if (event == Event::TabReverse || event == Event::ArrowUp) {
+                selected_field_ = (selected_field_ + kTotalFields - 1) % kTotalFields;
+                if (selected_field_ == 6) doh_cursor_pos_ = static_cast<int>(doh_url_input_.size());
+                if (selected_field_ == 7) proxy_cursor_pos_ = static_cast<int>(proxy_url_input_.size());
+                return true;
+            }
+
+            std::string* active_text = nullptr;
+            int* active_cursor = nullptr;
+            if (selected_field_ == 6) {
+                if (dns_mode_idx_ == 1 && doh_provider_idx_ == 3) {
+                    active_text = &doh_url_input_;
+                    active_cursor = &doh_cursor_pos_;
+                } else if (dns_mode_idx_ == 2) {
+                    active_text = &custom_dns_input_;
+                    active_cursor = &dns_cursor_pos_;
+                }
+            } else if (selected_field_ == 7) {
+                active_text = &proxy_url_input_;
+                active_cursor = &proxy_cursor_pos_;
+            }
+
+            if (!active_text || !active_cursor) {
+                return false;
+            }
+
+            if (event == Event::ArrowLeft) {
+                if (*active_cursor > 0) {
+                    (*active_cursor)--;
+                }
+                return true;
+            }
+            if (event == Event::ArrowRight) {
+                if (*active_cursor < static_cast<int>(active_text->size())) {
+                    (*active_cursor)++;
+                }
+                return true;
+            }
+            if (event == Event::Home || event == Event::CtrlA) {
+                *active_cursor = 0;
+                return true;
+            }
+            if (event == Event::End || event == Event::CtrlE) {
+                *active_cursor = static_cast<int>(active_text->size());
+                return true;
+            }
+            if (event == Event::Backspace) {
+                if (*active_cursor > 0 && *active_cursor <= static_cast<int>(active_text->size())) {
+                    active_text->erase(*active_cursor - 1, 1);
+                    (*active_cursor)--;
+                }
+                return true;
+            }
+            if (event == Event::Delete) {
+                if (*active_cursor < static_cast<int>(active_text->size())) {
+                    active_text->erase(*active_cursor, 1);
+                }
+                return true;
+            }
+            if (event == Event::CtrlU) {
+                if (*active_cursor > 0) {
+                    active_text->erase(0, *active_cursor);
+                    *active_cursor = 0;
+                }
+                return true;
+            }
+            if (event == Event::CtrlW) {
+                if (*active_cursor > 0) {
+                    int p = *active_cursor;
+                    while (p > 0 && active_text->at(p - 1) == ' ') p--;
+                    while (p > 0 && active_text->at(p - 1) != ' ' && active_text->at(p - 1) != '/' && active_text->at(p - 1) != ':') p--;
+                    active_text->erase(p, *active_cursor - p);
+                    *active_cursor = p;
+                }
+                return true;
+            }
+
+            if (event.is_character()) {
+                const auto& ch_str = event.character();
+                active_text->insert(*active_cursor, ch_str);
+                *active_cursor += static_cast<int>(ch_str.size());
+                return true;
+            }
+
+            return true;
+        }
+
         if (event == Event::ArrowDown || event == Event::Character('j') || event == Event::Tab) {
             selected_field_ = (selected_field_ + 1) % kTotalFields;
+            if (selected_field_ == 6) doh_cursor_pos_ = static_cast<int>(doh_url_input_.size());
+            if (selected_field_ == 7) proxy_cursor_pos_ = static_cast<int>(proxy_url_input_.size());
             return true;
         }
 
         if (event == Event::ArrowUp || event == Event::Character('k') || event == Event::TabReverse) {
             selected_field_ = (selected_field_ + kTotalFields - 1) % kTotalFields;
+            if (selected_field_ == 6) doh_cursor_pos_ = static_cast<int>(doh_url_input_.size());
+            if (selected_field_ == 7) proxy_cursor_pos_ = static_cast<int>(proxy_url_input_.size());
             return true;
         }
 
@@ -321,6 +424,9 @@ void SettingsView::reload_from_config() {
     doh_url_input_ = config_.doh_url;
     custom_dns_input_ = config_.custom_dns_server;
     proxy_url_input_ = config_.proxy_url;
+    doh_cursor_pos_ = static_cast<int>(doh_url_input_.size());
+    dns_cursor_pos_ = static_cast<int>(custom_dns_input_.size());
+    proxy_cursor_pos_ = static_cast<int>(proxy_url_input_.size());
     max_cache_size_mb_ = config_.max_cache_size_mb;
     lock_liked_tracks_in_cache_ = config_.lock_liked_tracks_in_cache;
     dont_count_liked_in_general_cache_ = config_.dont_count_liked_in_general_cache;
@@ -331,9 +437,28 @@ void SettingsView::reload_from_config() {
     download_drm_tracks_in_likes_ = config_.download_drm_tracks_in_likes;
 }
 
+bool SettingsView::is_editing_text() const {
+    if (selected_field_ == 6) {
+        return (dns_mode_idx_ == 1 && doh_provider_idx_ == 3) || (dns_mode_idx_ == 2);
+    }
+    if (selected_field_ == 7) {
+        return true;
+    }
+    return false;
+}
+
 void SettingsView::select_field(int field_idx) {
     if (field_idx >= 0 && field_idx < 19) {
         selected_field_ = field_idx;
+        if (selected_field_ == 6) {
+            if (dns_mode_idx_ == 1 && doh_provider_idx_ == 3) {
+                doh_cursor_pos_ = static_cast<int>(doh_url_input_.size());
+            } else if (dns_mode_idx_ == 2) {
+                dns_cursor_pos_ = static_cast<int>(custom_dns_input_.size());
+            }
+        } else if (selected_field_ == 7) {
+            proxy_cursor_pos_ = static_cast<int>(proxy_url_input_.size());
+        }
     }
 }
 
@@ -351,7 +476,7 @@ bool SettingsView::handle_mouse_click(int y, int x) {
     }
 
     int field = it->second;
-    selected_field_ = field;
+    select_field(field);
 
     if (field == 0) { // Auto-Extract Cookies
         if (on_extract_cookies_) {
@@ -585,21 +710,68 @@ Element SettingsView::render(bool is_focused) {
     auto doh_prov_elem = text(doh_prov_display)
         | (selected_field_ == 5 && is_focused ? color(accent) | bold : color(Color::White));
 
+    auto render_input_box = [accent](const std::string& content, const std::string& placeholder, int cursor_pos, bool is_editing) -> Element {
+        Element inner;
+        if (content.empty()) {
+            if (is_editing) {
+                inner = hbox({
+                    text(" ") | bgcolor(accent) | color(Color::Black),
+                    text(" " + placeholder) | color(Color::GrayDark)
+                });
+            } else {
+                inner = text(placeholder) | color(Color::GrayDark);
+            }
+        } else if (!is_editing) {
+            inner = text(content) | color(Color::White);
+        } else {
+            int pos = std::clamp(cursor_pos, 0, static_cast<int>(content.size()));
+            std::string before = content.substr(0, pos);
+            Element cursor_elem;
+            std::string after;
+            if (pos < static_cast<int>(content.size())) {
+                std::string ch = content.substr(pos, 1);
+                cursor_elem = text(ch) | bgcolor(accent) | color(Color::Black) | bold;
+                after = content.substr(pos + 1);
+            } else {
+                cursor_elem = text(" ") | bgcolor(accent) | color(Color::Black);
+            }
+            inner = hbox({
+                text(before) | color(Color::White),
+                cursor_elem,
+                text(after) | color(Color::White)
+            });
+        }
+
+        auto box = hbox({
+            text(" "),
+            inner | xflex,
+            text(" ")
+        }) | size(HEIGHT, EQUAL, 1);
+
+        if (is_editing) {
+            return box | borderRounded | color(accent) | bgcolor(Color::RGB(18, 18, 24)) | size(WIDTH, GREATER_THAN, 40);
+        } else {
+            return box | borderRounded | color(Color::GrayDark) | size(WIDTH, GREATER_THAN, 40);
+        }
+    };
+
     // 6. Custom DoH URL or Custom DNS IP
     Element custom_net_elem;
     std::string custom_net_label = "Custom Server Endpoint";
+    bool field_6_editing = (selected_field_ == 6 && is_focused);
     if (dns_mode_idx_ == 1 && doh_provider_idx_ == 3) {
         custom_net_label = "Custom DoH URL";
-        custom_net_elem = doh_input_comp_->Render() | (selected_field_ == 6 && is_focused ? border : frame);
+        custom_net_elem = render_input_box(doh_url_input_, "https://cloudflare-dns.com/dns-query", doh_cursor_pos_, field_6_editing);
     } else if (dns_mode_idx_ == 2) {
         custom_net_label = "Custom DNS Server IP";
-        custom_net_elem = dns_input_comp_->Render() | (selected_field_ == 6 && is_focused ? border : frame);
+        custom_net_elem = render_input_box(custom_dns_input_, "1.1.1.1", dns_cursor_pos_, field_6_editing);
     } else {
         custom_net_elem = text("(Not required for current DNS mode)") | color(Color::GrayDark);
     }
 
     // 7. Proxy URL
-    auto proxy_elem = proxy_input_comp_->Render() | (selected_field_ == 7 && is_focused ? border : frame);
+    bool field_7_editing = (selected_field_ == 7 && is_focused);
+    auto proxy_elem = render_input_box(proxy_url_input_, "socks5://127.0.0.1:1080 or http://127.0.0.1:7890", proxy_cursor_pos_, field_7_editing);
 
     // 8. Track Cache Settings & Liked Locking
     std::string max_cache_str = (max_cache_size_mb_ == 0) ? "Unlimited" : (std::to_string(max_cache_size_mb_) + " MB");

@@ -424,6 +424,28 @@ void App::init_ui() {
             return handle_mouse_event(event);
         }
 
+        // If Search Input is focused, let FTXUI Input handle typing and navigation inside the box
+        if (state_.focused_panel == models::FocusPanel::SearchInput) {
+            if (event == Event::Escape) {
+                state_.focused_panel = models::FocusPanel::TrackList;
+                return true;
+            }
+            if (event == Event::Tab) {
+                cycle_focus(false);
+                return true;
+            }
+            if (event == Event::TabReverse) {
+                cycle_focus(true);
+                return true;
+            }
+            return header_view_->get_component()->OnEvent(event);
+        }
+
+        // If a text input box in Settings is focused, forward ALL events directly to settings view
+        if (state_.focused_panel == models::FocusPanel::SettingsPanel && settings_view_ && settings_view_->is_editing_text()) {
+            return settings_view_->get_component()->OnEvent(event);
+        }
+
         // Global Help Modal toggle
         if (event == Event::Character('?')) {
             if (state_.focused_panel == models::FocusPanel::HelpModal) {
@@ -496,11 +518,6 @@ void App::init_ui() {
         if (event == Event::TabReverse) {
             cycle_focus(true);
             return true;
-        }
-
-        // If Search Input is focused, let FTXUI Input handle typing and navigation inside the box
-        if (state_.focused_panel == models::FocusPanel::SearchInput) {
-            return header_view_->get_component()->OnEvent(event);
         }
 
         // Quick View Switching 1..7
