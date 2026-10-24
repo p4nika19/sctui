@@ -105,12 +105,12 @@ int main(int argc, char** argv) {
         }
     } catch (const std::exception& e) {
         restore_terminal_modes();
-        LOG_FATAL("Main", "Unhandled standard exception: " + std::string(e.what()));
+        LOG_ERROR("Main", "Unhandled standard exception: " + std::string(e.what()));
         std::cerr << "Unhandled standard exception: " << e.what() << std::endl;
         return 1;
     } catch (...) {
         restore_terminal_modes();
-        LOG_FATAL("Main", "Unhandled unknown exception occurred");
+        LOG_ERROR("Main", "Unhandled unknown exception occurred");
         std::cerr << "Unhandled unknown exception occurred." << std::endl;
         return 1;
     }

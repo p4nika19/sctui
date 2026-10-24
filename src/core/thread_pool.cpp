@@ -18,14 +18,15 @@ ThreadPool::ThreadPool(size_t num_threads) {
                                !tasks_.empty();
                     });
 
-                    if ((stop_.load(std::memory_order_relaxed) || stop_tok.stop_requested()) && tasks_.empty()) {
-                        return;
+                    if (tasks_.empty()) {
+                        if (stop_.load(std::memory_order_relaxed) || stop_tok.stop_requested()) {
+                            return;
+                        }
+                        continue;
                     }
 
-                    if (!tasks_.empty()) {
-                        task = std::move(tasks_.front());
-                        tasks_.pop();
-                    }
+                    task = std::move(tasks_.front());
+                    tasks_.pop();
                 }
 
                 if (task) {
@@ -58,17 +59,10 @@ void ThreadPool::shutdown() {
         return;
     }
 
-    {
-        std::lock_guard<std::mutex> lock(queue_mutex_);
-        while (!tasks_.empty()) {
-            tasks_.pop();
-        }
-    }
     cv_.notify_all();
 
     for (auto& worker : workers_) {
         if (worker.joinable()) {
-            worker.request_stop();
             worker.join();
         }
     }

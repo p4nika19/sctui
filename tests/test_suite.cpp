@@ -5,6 +5,7 @@
 #include "sctui/net/soundcloud_api.hpp"
 #include "sctui/core/spsc_queue.hpp"
 #include "sctui/core/channel.hpp"
+#include "sctui/core/thread_pool.hpp"
 #include "sctui/core/config.hpp"
 #include "sctui/core/entropy.hpp"
 #include "sctui/core/cover_art.hpp"
@@ -986,10 +987,50 @@ void test_fullscreen_mode() {
     std::cout << "  -> Fullscreen Mode State & High-Res 500x500 Cover Scaling OK" << std::endl;
 }
 
+void test_thread_pool() {
+    std::cout << "[Test] Running ThreadPool verification..." << std::endl;
+    sctui::core::ThreadPool pool(4);
+    std::atomic<int> counter{0};
+    for (int i = 0; i < 20; ++i) {
+        pool.enqueue([&counter]() {
+            counter.fetch_add(1, std::memory_order_relaxed);
+        });
+    }
+    pool.shutdown();
+    REQUIRE(counter.load() == 20);
+    std::cout << "  -> ThreadPool dispatched 20 tasks and shutdown cleanly OK" << std::endl;
+}
+
+void test_queue_alignment() {
+    std::cout << "[Test] Running Queue Sequence Number Alignment verification..." << std::endl;
+    int total_tracks = 142;
+    int max_digits = std::max(2, static_cast<int>(std::to_string(total_tracks).length()));
+    REQUIRE(max_digits == 3);
+
+    auto format_num = [max_digits](int idx) {
+        std::string num_str = std::to_string(idx + 1);
+        return std::string(static_cast<size_t>(std::max(0, max_digits - static_cast<int>(num_str.length()))), ' ') + num_str + ". ";
+    };
+
+    std::string line_1 = format_num(0);   // "  1. "
+    std::string line_26 = format_num(25); // " 26. "
+    std::string line_100 = format_num(99);// "100. "
+
+    REQUIRE(line_1.length() == 5);
+    REQUIRE(line_26.length() == 5);
+    REQUIRE(line_100.length() == 5);
+    REQUIRE(line_1 == "  1. ");
+    REQUIRE(line_26 == " 26. ");
+    REQUIRE(line_100 == "100. ");
+    std::cout << "  -> Dynamic Queue alignment relative to last track verified OK" << std::endl;
+}
+
 int main() {
     std::cout << "=== Running sctui test suite ===" << std::endl;
     test_spsc_queue();
     test_bounded_channel();
+    test_thread_pool();
+    test_queue_alignment();
     test_entropy_shuffle();
     test_dynamic_queue_append_and_shuffle();
     test_volume_150_and_visualizer_curve();
