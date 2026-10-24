@@ -298,6 +298,7 @@ void DrmSatelliteDaemon::play(uint64_t track_id, const std::string& stream_url) 
     cmd["cmd"] = "play";
     cmd["track_id"] = track_id;
     cmd["stream_url"] = stream_url;
+    cmd["volume"] = current_volume_.load(std::memory_order_relaxed);
 
     {
         std::lock_guard<std::mutex> lock(state_mutex_);
@@ -325,6 +326,7 @@ void DrmSatelliteDaemon::seek(uint64_t position_ms) {
 
 void DrmSatelliteDaemon::set_volume(float volume_percent_0_to_150) {
     float vol = std::clamp(volume_percent_0_to_150 / 100.0f, 0.0f, 1.0f);
+    current_volume_.store(vol, std::memory_order_relaxed);
     nlohmann::json cmd;
     cmd["cmd"] = "set_volume";
     cmd["volume"] = vol;

@@ -14,21 +14,21 @@ QueueView::QueueView(models::AppState& state, PlayFromQueueCallback on_play_from
             return false;
         }
 
-        if (event == Event::Character('j') || event == Event::ArrowDown) {
+        if (event == Event::ArrowDown) {
             if (!state_.queue.tracks.empty()) {
                 selected_index_ = std::min(static_cast<int>(state_.queue.tracks.size() - 1), selected_index_ + 1);
             }
             return true;
         }
-        if (event == Event::Character('k') || event == Event::ArrowUp) {
+        if (event == Event::ArrowUp) {
             selected_index_ = std::max(0, selected_index_ - 1);
             return true;
         }
-        if (event == Event::Character('J')) { // Shift+J: move down
+        if (event == Event::Character('j') || event == Event::Character('J') || event == Event::CtrlJ || event == Event::AltJ) {
             move_selected_down();
             return true;
         }
-        if (event == Event::Character('K')) { // Shift+K: move up
+        if (event == Event::Character('k') || event == Event::Character('K') || event == Event::CtrlK || event == Event::AltK) {
             move_selected_up();
             return true;
         }

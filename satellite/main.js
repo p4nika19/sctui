@@ -81,6 +81,7 @@ function cleanupAndExit(code = 0) {
 let win = null;
 let isPageReady = false;
 let pendingPlay = null;
+let currentVolume = 0.5;
 let localServer = null;
 let localPort = 47823;
 
@@ -164,7 +165,13 @@ function handleCommand(cmd) {
       break;
 
     case 'play':
+      if (typeof cmd.volume === 'number' && !isNaN(cmd.volume)) {
+        currentVolume = Math.max(0.0, Math.min(1.0, cmd.volume));
+      } else {
+        cmd.volume = currentVolume;
+      }
       if (isPageReady && win && !win.isDestroyed()) {
+        win.webContents.send('cmd-volume', currentVolume);
         win.webContents.send('cmd-play', cmd);
       } else {
         pendingPlay = cmd;
@@ -179,6 +186,7 @@ function handleCommand(cmd) {
 
     case 'resume':
       if (win && !win.isDestroyed()) {
+        win.webContents.send('cmd-volume', currentVolume);
         win.webContents.send('cmd-resume');
       }
       break;
@@ -190,9 +198,11 @@ function handleCommand(cmd) {
       break;
 
     case 'set_volume':
-      if (win && !win.isDestroyed()) {
-        const vol = typeof cmd.volume === 'number' ? cmd.volume : 1.0;
-        win.webContents.send('cmd-volume', vol);
+      if (typeof cmd.volume === 'number' && !isNaN(cmd.volume)) {
+        currentVolume = Math.max(0.0, Math.min(1.0, cmd.volume));
+      }
+      if (isPageReady && win && !win.isDestroyed()) {
+        win.webContents.send('cmd-volume', currentVolume);
       }
       break;
 
@@ -291,15 +301,18 @@ app.whenReady().then(async () => {
 
   win.webContents.on('did-finish-load', () => {
     isPageReady = true;
+    win.webContents.send('cmd-volume', currentVolume);
     sendIPC({
       type: 'ready',
       version: '1.0.0',
       cdm: 'widevine-vmp',
       pid: process.pid
     });
-    logInfo('Headless DRM satellite initialized with Widevine CDM support. PID: ' + process.pid);
+    logInfo('Headless DRM satellite initialized with Widevine CDM support. PID: ' + process.pid + ' (volume: ' + currentVolume + ')');
     if (pendingPlay) {
-      logInfo('Dispatching queued play command');
+      logInfo('Dispatching queued play command with volume ' + currentVolume);
+      pendingPlay.volume = currentVolume;
+      win.webContents.send('cmd-volume', currentVolume);
       win.webContents.send('cmd-play', pendingPlay);
       pendingPlay = null;
     }

@@ -54,12 +54,15 @@ Element HelpPopup::render(const models::AppState& state) {
         make_row("a", "Add selected track to queue"),
         make_row("A", "Play track next (insert after current)"),
         make_row("l", "Toggle like for selected track"),
-        make_row("J / K", "Move track down / up in queue"),
+        make_row("j / k or J / K", "Reorder track down / up in queue"),
+        make_row("Up / Down", "Move selection cursor in queue"),
         make_row("d / x", "Delete selected track from queue"),
         make_row("C", "Clear entire queue"),
 
         separatorLight(),
         section_header("GENERAL"),
+        make_row("F5 / R", "Refresh view / Resume interrupted loading"),
+        make_row("Ctrl+R", "Force reload view from scratch"),
         make_row("?", "Toggle this Help modal"),
         make_row("q / Ctrl+C", "Graceful exit and terminal restore"),
 

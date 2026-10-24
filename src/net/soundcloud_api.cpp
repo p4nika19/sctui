@@ -2,6 +2,8 @@
 #include "sctui/core/logger.hpp"
 #include <regex>
 #include <iostream>
+#include <thread>
+#include <chrono>
 #include <nlohmann/json.hpp>
 
 namespace sctui::net {
@@ -421,10 +423,25 @@ core::Result<SoundCloudApi::LikesPage> SoundCloudApi::get_user_likes_page(
         }
     }
 
-    auto resp = http_.get(fetch_url, {}, params);
+    core::Result<HttpResponse> resp;
+    for (int attempt = 0; attempt < 4; ++attempt) {
+        resp = http_.get(fetch_url, {}, params);
+        if (resp && resp->is_2xx()) {
+            break;
+        }
+        if (resp && (resp->status_code == 401 || resp->status_code == 403)) {
+            (void)resolve_client_id();
+            if (!client_id_.empty()) {
+                params["client_id"] = client_id_;
+            }
+        }
+        int delay = (resp && resp->status_code == 429) ? (1200 * (attempt + 1)) : (350 * (attempt + 1));
+        std::this_thread::sleep_for(std::chrono::milliseconds(delay));
+    }
+
     if (!resp || !resp->is_2xx()) {
         std::string err = resp ? "HTTP " + std::to_string(resp->status_code) : resp.error().message;
-        LOG_ERROR("SoundCloudApi", "Failed to fetch user likes page: " + err);
+        LOG_ERROR("SoundCloudApi", "Failed to fetch user likes page after retries: " + err);
         return core::MakeError(core::ErrorCode::NetworkError, err);
     }
 
@@ -534,10 +551,25 @@ core::Result<std::vector<models::Track>> SoundCloudApi::get_playlist_tracks(uint
         params["client_id"] = client_id_;
     }
 
-    auto resp = http_.get(url, {}, params);
+    core::Result<HttpResponse> resp;
+    for (int attempt = 0; attempt < 3; ++attempt) {
+        resp = http_.get(url, {}, params);
+        if (resp && resp->is_2xx()) {
+            break;
+        }
+        if (resp && (resp->status_code == 401 || resp->status_code == 403)) {
+            (void)resolve_client_id();
+            if (!client_id_.empty()) {
+                params["client_id"] = client_id_;
+            }
+        }
+        int delay = (resp && resp->status_code == 429) ? (1000 * (attempt + 1)) : (300 * (attempt + 1));
+        std::this_thread::sleep_for(std::chrono::milliseconds(delay));
+    }
+
     if (!resp || !resp->is_2xx()) {
         std::string err = resp ? "HTTP " + std::to_string(resp->status_code) : resp.error().message;
-        LOG_ERROR("SoundCloudApi", "Failed to fetch playlist " + std::to_string(playlist_id) + ": " + err);
+        LOG_ERROR("SoundCloudApi", "Failed to fetch playlist " + std::to_string(playlist_id) + " after retries: " + err);
         return core::MakeError(core::ErrorCode::NetworkError, err);
     }
 
@@ -577,7 +609,22 @@ core::Result<std::vector<models::Track>> SoundCloudApi::get_playlist_tracks(uint
                 {"client_id", client_id_}
             };
 
-            auto batch_resp = http_.get(std::string(ApiBase) + "/tracks", {}, batch_params);
+            core::Result<HttpResponse> batch_resp;
+            for (int attempt = 0; attempt < 4; ++attempt) {
+                batch_resp = http_.get(std::string(ApiBase) + "/tracks", {}, batch_params);
+                if (batch_resp && batch_resp->is_2xx()) {
+                    break;
+                }
+                if (batch_resp && (batch_resp->status_code == 401 || batch_resp->status_code == 403)) {
+                    (void)resolve_client_id();
+                    if (!client_id_.empty()) {
+                        batch_params["client_id"] = client_id_;
+                    }
+                }
+                int delay = (batch_resp && batch_resp->status_code == 429) ? (1500 * (attempt + 1)) : (400 * (attempt + 1));
+                std::this_thread::sleep_for(std::chrono::milliseconds(delay));
+            }
+
             if (batch_resp && batch_resp->is_2xx()) {
                 auto batch_tracks = parse_tracks_json(batch_resp->body);
                 if (batch_tracks) {
@@ -585,7 +632,10 @@ core::Result<std::vector<models::Track>> SoundCloudApi::get_playlist_tracks(uint
                         resolved_map[bt.id] = std::move(bt);
                     }
                 }
+            } else {
+                LOG_WARN("SoundCloudApi", "Failed to resolve track stub batch (" + ids_str + ") after retries");
             }
+            std::this_thread::sleep_for(std::chrono::milliseconds(60));
         }
 
         // Reconstruct in exact playlist order
@@ -598,7 +648,13 @@ core::Result<std::vector<models::Track>> SoundCloudApi::get_playlist_tracks(uint
             }
         }
 
-        LOG_INFO("SoundCloudApi", "Resolved all " + std::to_string(final_tracks.size()) + " tracks for playlist " + std::to_string(playlist_id));
+        if (final_tracks.size() < track_order.size()) {
+            LOG_INFO("SoundCloudApi", "Resolved " + std::to_string(final_tracks.size()) + " of " +
+                     std::to_string(track_order.size()) + " tracks for playlist " + std::to_string(playlist_id) +
+                     " (" + std::to_string(track_order.size() - final_tracks.size()) + " tracks unavailable or removed)");
+        } else {
+            LOG_INFO("SoundCloudApi", "Resolved all " + std::to_string(final_tracks.size()) + " tracks for playlist " + std::to_string(playlist_id));
+        }
         return final_tracks;
     } catch (const std::exception& e) {
         LOG_ERROR("SoundCloudApi", "Failed to parse playlist tracks JSON: " + std::string(e.what()));

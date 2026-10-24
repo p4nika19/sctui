@@ -540,6 +540,18 @@ void App::init_ui() {
             return true;
         }
 
+        // Reload / Refresh current view (F5 or Shift+R)
+        if (event == Event::F5 || event == Event::Character('R')) {
+            submit_reload_current_view(false);
+            return true;
+        }
+
+        // Force Reload view from scratch (Ctrl+R)
+        if (event == Event::CtrlR) {
+            submit_reload_current_view(true);
+            return true;
+        }
+
         // Global Playback Controls
         if (event == Event::Character(' ')) {
             audio_.toggle_playback();
@@ -838,7 +850,7 @@ void App::submit_load_view(models::ViewMode view) {
         state_.is_loading = true;
     }
 
-    thread_pool_.enqueue([this, view, has_existing_likes, top_like_id, existing_likes_set = std::move(existing_likes_set)]() {
+    thread_pool_.enqueue([this, view, has_existing_likes, top_like_id, existing_likes_set = std::move(existing_likes_set)]() mutable {
         if (!is_running_) return;
         switch (view) {
             case models::ViewMode::Settings:
@@ -906,6 +918,9 @@ void App::submit_load_view(models::ViewMode view) {
                     if (likes_fetch_generation_.load() == current_gen && is_running_) {
                         if (!diff_tracks.empty()) {
                             LOG_INFO("App", "Pre-pending " + std::to_string(diff_tracks.size()) + " newly liked track(s) diff");
+                            for (const auto& dt : diff_tracks) {
+                                existing_likes_set.insert(dt.id);
+                            }
                             ui_event_channel_.push(AsyncUIEvent{
                                 .type = AsyncEventType::LikesTracksDiffPrepended,
                                 .tracks_payload = std::move(diff_tracks)
@@ -913,20 +928,68 @@ void App::submit_load_view(models::ViewMode view) {
                         } else {
                             LOG_INFO("App", "Likes list is already completely up to date. No diff to load.");
                         }
-                        ui_event_channel_.push(AsyncUIEvent{
-                            .type = AsyncEventType::LikesFullyLoaded
-                        });
-                        screen_.PostEvent(Event::Custom);
+
+                        // If pagination was paused/incomplete previously, resume loading from where it paused!
+                        if (!likes_fully_fetched_.load() && !likes_resume_href_.empty()) {
+                            LOG_INFO("App", "Resuming incomplete likes pagination from: " + likes_resume_href_);
+                            while (!likes_resume_href_.empty() && is_running_ && likes_fetch_generation_.load() == current_gen) {
+                                auto next_page = api_.get_user_likes_page(200, likes_resume_href_);
+                                if (!next_page || likes_fetch_generation_.load() != current_gen || !is_running_) {
+                                    break;
+                                }
+                                if (next_page->tracks.empty()) {
+                                    likes_resume_href_.clear();
+                                    break;
+                                }
+                                likes_resume_href_ = next_page->next_href;
+                                std::vector<models::Track> new_tracks;
+                                new_tracks.reserve(next_page->tracks.size());
+                                for (auto& t : next_page->tracks) {
+                                    if (existing_likes_set.count(t.id) == 0) {
+                                        existing_likes_set.insert(t.id);
+                                        new_tracks.push_back(std::move(t));
+                                    }
+                                }
+                                if (!new_tracks.empty()) {
+                                    ui_event_channel_.push(AsyncUIEvent{
+                                        .type = AsyncEventType::LikesTracksAppended,
+                                        .tracks_payload = std::move(new_tracks)
+                                    });
+                                    screen_.PostEvent(Event::Custom);
+                                }
+                                std::this_thread::sleep_for(std::chrono::milliseconds(50));
+                            }
+                        }
+
+                        if (likes_fetch_generation_.load() == current_gen && is_running_) {
+                            if (likes_resume_href_.empty()) {
+                                likes_fully_fetched_.store(true);
+                                ui_event_channel_.push(AsyncUIEvent{
+                                    .type = AsyncEventType::LikesFullyLoaded
+                                });
+                            } else {
+                                likes_fully_fetched_.store(false);
+                                ui_event_channel_.push(AsyncUIEvent{
+                                    .type = AsyncEventType::ErrorMessage,
+                                    .text_payload = "Likes download paused at " + std::to_string(existing_likes_set.size()) +
+                                                    " tracks. Press F5 or Shift+R to resume."
+                                });
+                            }
+                            screen_.PostEvent(Event::Custom);
+                        }
                     }
                 } else {
                     LOG_INFO("App", "Initial load of user likes (page 1)...");
+                    likes_fully_fetched_.store(false);
+                    likes_resume_href_.clear();
                     auto page_res = api_.get_user_likes_page(200, "");
                     if (likes_fetch_generation_.load() != current_gen || !is_running_) {
                         return;
                     }
                     if (page_res) {
                         LOG_INFO("App", "Likes page 1 returned " + std::to_string(page_res->tracks.size()) + " tracks");
-                        std::string next_href = page_res->next_href;
+                        likes_resume_href_ = page_res->next_href;
+                        size_t total_loaded = page_res->tracks.size();
                         ui_event_channel_.push(AsyncUIEvent{
                             .type = AsyncEventType::LikesTracksReady,
                             .tracks_payload = std::move(page_res->tracks)
@@ -934,15 +997,17 @@ void App::submit_load_view(models::ViewMode view) {
                         screen_.PostEvent(Event::Custom);
 
                         // Concurrently fetch all remaining pages in batches of 200
-                        while (!next_href.empty() && is_running_ && likes_fetch_generation_.load() == current_gen) {
-                            auto next_page = api_.get_user_likes_page(200, next_href);
+                        while (!likes_resume_href_.empty() && is_running_ && likes_fetch_generation_.load() == current_gen) {
+                            auto next_page = api_.get_user_likes_page(200, likes_resume_href_);
                             if (!next_page || likes_fetch_generation_.load() != current_gen || !is_running_) {
                                 break;
                             }
                             if (next_page->tracks.empty()) {
+                                likes_resume_href_.clear();
                                 break;
                             }
-                            next_href = next_page->next_href;
+                            likes_resume_href_ = next_page->next_href;
+                            total_loaded += next_page->tracks.size();
                             ui_event_channel_.push(AsyncUIEvent{
                                 .type = AsyncEventType::LikesTracksAppended,
                                 .tracks_payload = std::move(next_page->tracks)
@@ -951,16 +1016,28 @@ void App::submit_load_view(models::ViewMode view) {
                             std::this_thread::sleep_for(std::chrono::milliseconds(50));
                         }
                         if (likes_fetch_generation_.load() == current_gen && is_running_) {
-                            ui_event_channel_.push(AsyncUIEvent{
-                                .type = AsyncEventType::LikesFullyLoaded
-                            });
+                            if (likes_resume_href_.empty()) {
+                                likes_fully_fetched_.store(true);
+                                ui_event_channel_.push(AsyncUIEvent{
+                                    .type = AsyncEventType::LikesFullyLoaded
+                                });
+                            } else {
+                                likes_fully_fetched_.store(false);
+                                ui_event_channel_.push(AsyncUIEvent{
+                                    .type = AsyncEventType::ErrorMessage,
+                                    .text_payload = "Likes download paused at " + std::to_string(total_loaded) +
+                                                    " tracks. Press F5 or Shift+R to resume."
+                                });
+                            }
                             screen_.PostEvent(Event::Custom);
                         }
                     } else {
+                        likes_fully_fetched_.store(false);
+                        likes_resume_href_.clear();
                         LOG_WARN("App", "Could not load user likes: " + page_res.error().message);
                         ui_event_channel_.push(AsyncUIEvent{
                             .type = AsyncEventType::ErrorMessage,
-                            .text_payload = page_res.error().message
+                            .text_payload = "Failed to load likes: " + page_res.error().message + " (Press F5 to retry)"
                         });
                         screen_.PostEvent(Event::Custom);
                     }
@@ -994,6 +1071,67 @@ void App::submit_load_view(models::ViewMode view) {
     });
 }
 
+void App::submit_reload_current_view(bool force_from_scratch) {
+    switch (state_.current_view) {
+        case models::ViewMode::Likes: {
+            if (force_from_scratch) {
+                state_.likes_tracks.clear();
+                likes_resume_href_.clear();
+                likes_fully_fetched_.store(false);
+                state_.notify("Force reloading likes library from scratch...", false, 3);
+            } else if (!likes_fully_fetched_.load() && !likes_resume_href_.empty()) {
+                state_.notify("Resuming likes download from track #" + std::to_string(state_.likes_tracks.size() + 1) + "...", false, 3);
+            } else {
+                state_.notify("Checking for new likes...", false, 2);
+            }
+            submit_load_view(models::ViewMode::Likes);
+            break;
+        }
+        case models::ViewMode::Playlists: {
+            if (state_.selected_playlist.has_value()) {
+                state_.notify("Reloading playlist: " + state_.selected_playlist->title + "...", false, 3);
+                submit_load_playlist(*state_.selected_playlist);
+            } else {
+                if (force_from_scratch) {
+                    state_.playlists.clear();
+                }
+                state_.notify("Refreshing playlists...", false, 2);
+                submit_load_view(models::ViewMode::Playlists);
+            }
+            break;
+        }
+        case models::ViewMode::Stream: {
+            if (force_from_scratch) {
+                state_.stream_tracks.clear();
+            }
+            state_.notify("Refreshing stream...", false, 2);
+            submit_load_view(models::ViewMode::Stream);
+            break;
+        }
+        case models::ViewMode::Search: {
+            if (!last_search_query_.empty()) {
+                state_.notify("Refreshing search results...", false, 2);
+                submit_search(last_search_query_);
+            }
+            break;
+        }
+        case models::ViewMode::Account: {
+            state_.notify("Refreshing account profile...", false, 2);
+            submit_load_account_profile();
+            break;
+        }
+        case models::ViewMode::Settings: {
+            if (settings_view_) {
+                settings_view_->reload_from_config();
+            }
+            state_.notify("Settings reloaded from config", false, 2);
+            break;
+        }
+        default:
+            break;
+    }
+}
+
 void App::submit_load_playlist(models::Playlist playlist) {
     state_.is_loading = true;
     state_.selected_playlist = playlist;
@@ -1006,20 +1144,30 @@ void App::submit_load_playlist(models::Playlist playlist) {
         auto res = api_.get_playlist_tracks(playlist.id);
         if (!is_running_) return;
         if (res) {
-            LOG_INFO("App", "Loaded " + std::to_string(res->size()) + " tracks for playlist " + playlist.title);
+            size_t loaded_count = res->size();
+            LOG_INFO("App", "Loaded " + std::to_string(loaded_count) + " tracks for playlist " + playlist.title);
             ui_event_channel_.push(AsyncUIEvent{
                 .type = AsyncEventType::PlaylistTracksReady,
                 .tracks_payload = std::move(*res)
             });
-            ui_event_channel_.push(AsyncUIEvent{
-                .type = AsyncEventType::InfoMessage,
-                .text_payload = "Loaded playlist: " + playlist.title + " (" + std::to_string(res->size()) + " tracks)"
-            });
+            if (playlist.track_count > 0 && loaded_count < playlist.track_count) {
+                size_t missing = playlist.track_count - loaded_count;
+                ui_event_channel_.push(AsyncUIEvent{
+                    .type = AsyncEventType::InfoMessage,
+                    .text_payload = "Loaded " + std::to_string(loaded_count) + "/" + std::to_string(playlist.track_count) +
+                                    " tracks (" + std::to_string(missing) + " unavailable or removed). Press F5 to reload."
+                });
+            } else {
+                ui_event_channel_.push(AsyncUIEvent{
+                    .type = AsyncEventType::InfoMessage,
+                    .text_payload = "Loaded playlist: " + playlist.title + " (" + std::to_string(loaded_count) + " tracks)"
+                });
+            }
         } else {
             LOG_ERROR("App", "Failed to load playlist tracks: " + res.error().message);
             ui_event_channel_.push(AsyncUIEvent{
                 .type = AsyncEventType::ErrorMessage,
-                .text_payload = "Playlist error: " + res.error().message
+                .text_payload = "Playlist error: " + res.error().message + " (Press F5 to retry)"
             });
         }
         screen_.PostEvent(Event::Custom);

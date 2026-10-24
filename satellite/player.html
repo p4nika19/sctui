@@ -10,6 +10,7 @@
   <script>
     const audio = document.getElementById('audio-elem');
     let currentTrackId = 0;
+    let currentVolume = 0.5;
     let hls = null;
     let audioCtx = null;
     let analyser = null;
@@ -78,6 +79,10 @@
         try {
           cleanupHls();
           currentTrackId = payload.track_id || 0;
+          if (typeof payload.volume === 'number' && !isNaN(payload.volume)) {
+            currentVolume = Math.max(0.0, Math.min(1.0, payload.volume));
+          }
+          audio.volume = currentVolume;
 
           let streamUrl = payload.stream_url || '';
           let licenseToken = payload.license_token || '';
@@ -135,6 +140,7 @@
 
             hls.on(window.Hls.Events.MANIFEST_PARSED, () => {
               ensureAudioContext();
+              audio.volume = currentVolume;
               const playPromise = audio.play();
               if (playPromise !== undefined) {
                 playPromise.catch((err) => {
@@ -164,6 +170,7 @@
           } else {
             // Direct playback for progressive streams
             ensureAudioContext();
+            audio.volume = currentVolume;
             audio.src = streamUrl;
             audio.currentTime = 0;
             const playPromise = audio.play();
@@ -204,7 +211,8 @@
       window.sctuiBridge.onCommand('cmd-volume', (vol) => {
         try {
           if (!isNaN(vol)) {
-            audio.volume = Math.max(0.0, Math.min(1.0, vol));
+            currentVolume = Math.max(0.0, Math.min(1.0, vol));
+            audio.volume = currentVolume;
           }
         } catch (e) {}
       });
@@ -240,6 +248,7 @@
     });
 
     audio.addEventListener('playing', () => {
+      audio.volume = currentVolume;
       startSpectrum();
       window.sctuiBridge.sendEvent({
         type: 'state',

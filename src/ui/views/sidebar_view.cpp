@@ -88,50 +88,79 @@ Element SidebarView::render(bool is_focused) {
 
     for (const auto& entry : entries) {
         bool is_active = (state_.current_view == entry.mode);
-        bool is_selected = (selected_row_ == static_cast<int>(entry.mode) && is_focused);
+        bool is_cursor = (selected_row_ == static_cast<int>(entry.mode));
         Element item_element;
 
         if (state_.is_compact()) {
-            // In compact mode, show only icons
-            item_element = hbox({
-                text(entry.icon) | center
-            });
+            // In compact mode, show only icons with active bar & cursor triangle
+            Elements icon_row;
+            if (is_active) {
+                icon_row.push_back(text("▎") | color(accent) | bold);
+            } else {
+                icon_row.push_back(text(" "));
+            }
+            if (is_cursor && is_focused) {
+                icon_row.push_back(text("►") | color(accent) | bold);
+            } else {
+                icon_row.push_back(text(" "));
+            }
+            icon_row.push_back(text(entry.icon) | (is_active ? (color(accent) | bold) : color(Color::White)));
+            item_element = hbox(std::move(icon_row)) | center;
         } else {
             // Full sidebar
             Elements row;
-            if (is_selected) {
+
+            // 1. Colored vertical line indicator for active tab
+            if (is_active) {
+                row.push_back(text("▎") | color(accent) | bold);
+            } else {
+                row.push_back(text(" "));
+            }
+
+            // 2. Triangle indicator for selection / cursor position
+            if (is_cursor && is_focused) {
                 row.push_back(text("► ") | color(accent) | bold);
-                row.push_back(text(entry.icon) | bold);
+            } else if (is_cursor && !is_focused) {
+                row.push_back(text("▻ ") | color(Color::GrayLight));
+            } else {
+                row.push_back(text("  "));
+            }
+
+            // 3. Icon & Label
+            if (is_active) {
+                row.push_back(text(entry.icon) | color(accent) | bold);
                 row.push_back(text(" ") | bold);
                 row.push_back(text(entry.label) | color(Color::White) | bold);
-            } else if (is_active) {
-                row.push_back(text(sym.play + " ") | color(accent) | bold);
-                row.push_back(text(entry.icon) | bold);
+            } else if (is_cursor && is_focused) {
+                row.push_back(text(entry.icon) | color(Color::White) | bold);
                 row.push_back(text(" ") | bold);
                 row.push_back(text(entry.label) | color(Color::White) | bold);
             } else {
-                row.push_back(text("  "));
                 row.push_back(text(entry.icon) | color(Color::GrayLight));
                 row.push_back(text(" "));
                 row.push_back(text(entry.label) | color(Color::GrayLight));
             }
 
+            // 4. Count badge if available
             if (!entry.count_str.empty()) {
                 row.push_back(filler());
                 row.push_back(text("(") | color(Color::GrayDark));
-                row.push_back(text(entry.count_str) | color(accent));
+                row.push_back(text(entry.count_str) | color(is_active ? accent : Color::GrayLight));
                 row.push_back(text(")") | color(Color::GrayDark));
             }
 
             item_element = hbox(std::move(row));
         }
 
-        if (is_selected || is_active) {
+        // Colored line background for currently active tab vs subtle cursor background
+        if (is_active) {
             item_element = item_element | bgcolor(Color::RGB(
-                state_.accent_color.r / (is_selected ? 6 : 9),
-                state_.accent_color.g / (is_selected ? 6 : 9),
-                state_.accent_color.b / (is_selected ? 6 : 9)
+                state_.accent_color.r / 5,
+                state_.accent_color.g / 5,
+                state_.accent_color.b / 5
             ));
+        } else if (is_cursor && is_focused) {
+            item_element = item_element | bgcolor(Color::RGB(26, 26, 32));
         }
 
         items.push_back(item_element);

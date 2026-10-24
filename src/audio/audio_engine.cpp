@@ -260,6 +260,7 @@ struct AudioEngine::Impl {
         if (cmd.is_drm) {
             if (!drm_daemon) {
                 drm_daemon = std::make_unique<DrmSatelliteDaemon>();
+                drm_daemon->set_volume(volume_percent.load(std::memory_order_relaxed));
                 drm_daemon->set_on_state([this](PlaybackState s, uint64_t pos, uint64_t dur) {
                     state.store(s, std::memory_order_relaxed);
                     if (dur > 0) duration_ms.store(dur, std::memory_order_relaxed);
@@ -718,7 +719,7 @@ core::Result<void> AudioEngine::init() {
                     break;
                 case AudioCommandType::SetVolume:
                     impl_->volume_percent.store(std::clamp(cmd->volume, 0.0f, 150.0f), std::memory_order_relaxed);
-                    if (impl_->is_playing_drm.load(std::memory_order_relaxed) && impl_->drm_daemon) {
+                    if (impl_->drm_daemon) {
                         impl_->drm_daemon->set_volume(cmd->volume);
                     }
                     break;

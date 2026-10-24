@@ -83,6 +83,7 @@ private:
     void submit_search(const std::string& query);
     void submit_play_track(models::Track track);
     void submit_load_view(models::ViewMode view);
+    void submit_reload_current_view(bool force_from_scratch = false);
     void submit_load_playlist(models::Playlist playlist);
     void submit_fetch_waveform(const models::Track& track);
     void submit_toggle_like(models::Track track);
@@ -140,6 +141,8 @@ private:
     bool queue_source_is_likes_{false};
     std::atomic<bool> is_downloading_likes_{false};
     std::jthread likes_download_thread_;
+    std::string likes_resume_href_;
+    std::atomic<bool> likes_fully_fetched_{false};
 };
 
 } // namespace sctui::ui
