@@ -43,6 +43,19 @@ namespace sctui::core {
 
 namespace {
 
+struct RenderState {
+    int x{-1};
+    int y{-1};
+    int w{-1};
+    int h{-1};
+    size_t seq_hash{0};
+};
+
+static std::unordered_map<uint32_t, RenderState>& get_drawn_states() {
+    static std::unordered_map<uint32_t, RenderState> s_drawn_states;
+    return s_drawn_states;
+}
+
 class TerminalGraphicsNode : public ftxui::Node {
 public:
     TerminalGraphicsNode(int width, int height, std::string escape_seq, uint32_t image_id = 1)
@@ -67,12 +80,24 @@ public:
             }
         }
 
-        // Always place the graphics escape sequence at the top-left cell.
-        // FTXUI's internal double-buffer screen diffing automatically prevents
-        // re-emitting identical cell payloads across unchanged frames.
+        // Only emit the graphics escape sequence when position, dimensions, or payload change,
+        // or when explicitly invalidated by clear_terminal_image().
+        // This prevents constant 20-30 FPS visualizer redraws from flooding the terminal and causing flickering.
         if (box_.x_min >= 0 && box_.x_min < screen.dimx() &&
             box_.y_min >= 0 && box_.y_min < screen.dimy()) {
-            screen.PixelAt(box_.x_min, box_.y_min).character = escape_seq_;
+            auto& states = get_drawn_states();
+            auto& state = states[image_id_];
+            size_t cur_hash = std::hash<std::string>{}(escape_seq_);
+
+            if (state.x != box_.x_min || state.y != box_.y_min ||
+                state.w != width_ || state.h != height_ || state.seq_hash != cur_hash) {
+                state.x = box_.x_min;
+                state.y = box_.y_min;
+                state.w = width_;
+                state.h = height_;
+                state.seq_hash = cur_hash;
+                screen.PixelAt(box_.x_min, box_.y_min).character = escape_seq_;
+            }
         }
     }
 
@@ -80,7 +105,7 @@ private:
     int width_;
     int height_;
     std::string escape_seq_;
-    [[maybe_unused]] uint32_t image_id_{1};
+    uint32_t image_id_{1};
 };
 
 } // namespace
@@ -412,7 +437,7 @@ ftxui::Element CoverArtProcessor::render_cover_element(
         if (b64.size() <= kChunkSize) {
             seq = "\033_Ga=T,f=100,t=d,i=" + std::to_string(image_id) +
                   ",c=" + std::to_string(target_w) + ",r=" + std::to_string(target_h) +
-                  ",C=1,q=2;" + b64 + "\033\\ ";
+                  ",z=-1,C=1,q=2;" + b64 + "\033\\ ";
         } else {
             size_t offset = 0;
             bool first = true;
@@ -424,7 +449,7 @@ ftxui::Element CoverArtProcessor::render_cover_element(
                 if (first) {
                     seq += "\033_Ga=T,f=100,t=d,i=" + std::to_string(image_id) +
                            ",c=" + std::to_string(target_w) + ",r=" + std::to_string(target_h) +
-                           ",C=1,q=2,m=" + std::string(last ? "0" : "1") + ";" + chunk + "\033\\";
+                           ",z=-1,C=1,q=2,m=" + std::string(last ? "0" : "1") + ";" + chunk + "\033\\";
                     first = false;
                 } else {
                     seq += "\033_Gm=" + std::string(last ? "0" : "1") + ";" + chunk + "\033\\";
@@ -544,9 +569,12 @@ ftxui::Element CoverArtProcessor::render_placeholder(int width, int height, cons
 }
 
 void CoverArtProcessor::clear_terminal_image(uint32_t image_id) {
+    auto& states = get_drawn_states();
     if (image_id == 0) {
+        states.clear();
         std::cout << "\033_Ga=d,d=a,q=2\033\\" << std::flush;
     } else {
+        states.erase(image_id);
         std::cout << "\033_Ga=d,d=i,i=" << image_id << ",q=2\033\\" << std::flush;
     }
 }

@@ -4,7 +4,7 @@
  */
 
 const electron = require('electron');
-const { app, BrowserWindow, ipcMain } = electron;
+const { app, session, BrowserWindow, ipcMain } = electron;
 const components = electron.components;
 const path = require('path');
 const readline = require('readline');
@@ -169,6 +169,30 @@ app.whenReady().then(async () => {
     }
   }
 
+  // Grant mediaKeySystem (EME) permissions for Widevine CDM
+  session.defaultSession.setPermissionRequestHandler((webContents, permission, callback) => {
+    if (permission === 'mediaKeySystem' || permission === 'media') {
+      return callback(true);
+    }
+    callback(false);
+  });
+
+  session.defaultSession.setPermissionCheckHandler((webContents, permission) => {
+    if (permission === 'mediaKeySystem' || permission === 'media') {
+      return true;
+    }
+    return false;
+  });
+
+  // Ensure requests to SoundCloud streaming and license endpoints contain valid Origin headers
+  session.defaultSession.webRequest.onBeforeSendHeaders((details, callback) => {
+    const headers = details.requestHeaders || {};
+    headers['Origin'] = 'https://soundcloud.com';
+    headers['Referer'] = 'https://soundcloud.com/';
+    headers['User-Agent'] = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36';
+    callback({ cancel: false, requestHeaders: headers });
+  });
+
   win = new BrowserWindow({
     show: false,
     width: 1,
@@ -180,6 +204,7 @@ app.whenReady().then(async () => {
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
+      webSecurity: false, // Bypass Same-Origin restrictions for player.html accessing CDN & license server
       backgroundThrottling: false,
       preload: path.join(__dirname, 'preload.js')
     }

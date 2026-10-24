@@ -29,6 +29,7 @@ enum class AsyncEventType {
     StreamTracksReady,
     LikesTracksReady,
     LikesTracksAppended,
+    LikesTracksDiffPrepended,
     LikesFullyLoaded,
     LikesDownloadProgress,
     LikesDownloadFinished,

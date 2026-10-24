@@ -825,9 +825,20 @@ void App::submit_load_view(models::ViewMode view) {
         return;
     }
 
-    state_.is_loading = true;
+    bool has_existing_likes = !state_.likes_tracks.empty();
+    uint64_t top_like_id = has_existing_likes ? state_.likes_tracks.front().id : 0;
+    std::unordered_set<uint64_t> existing_likes_set;
+    if (view == models::ViewMode::Likes && has_existing_likes) {
+        existing_likes_set.reserve(state_.likes_tracks.size());
+        for (const auto& t : state_.likes_tracks) {
+            existing_likes_set.insert(t.id);
+        }
+        state_.is_loading = false; // Show already loaded likes immediately
+    } else {
+        state_.is_loading = true;
+    }
 
-    thread_pool_.enqueue([this, view]() {
+    thread_pool_.enqueue([this, view, has_existing_likes, top_like_id, existing_likes_set = std::move(existing_likes_set)]() {
         if (!is_running_) return;
         switch (view) {
             case models::ViewMode::Settings:
@@ -862,50 +873,97 @@ void App::submit_load_view(models::ViewMode view) {
             }
             case models::ViewMode::Likes: {
                 uint64_t current_gen = ++likes_fetch_generation_;
-                LOG_INFO("App", "Fetching user likes (page 1)...");
-                auto page_res = api_.get_user_likes_page(200, "");
-                if (likes_fetch_generation_.load() != current_gen || !is_running_) {
-                    return;
-                }
-                if (page_res) {
-                    LOG_INFO("App", "Likes page 1 returned " + std::to_string(page_res->tracks.size()) + " tracks");
-                    std::string next_href = page_res->next_href;
-                    ui_event_channel_.push(AsyncUIEvent{
-                        .type = AsyncEventType::LikesTracksReady,
-                        .tracks_payload = std::move(page_res->tracks)
-                    });
-                    screen_.PostEvent(Event::Custom);
+                if (has_existing_likes) {
+                    LOG_INFO("App", "Checking for new likes diff (top ID: " + std::to_string(top_like_id) + ")...");
+                    std::vector<models::Track> diff_tracks;
+                    std::string next_href = "";
+                    bool hit_existing = false;
 
-                    // Concurrently fetch all remaining pages in batches of 200
-                    while (!next_href.empty() && is_running_ && likes_fetch_generation_.load() == current_gen) {
-                        auto next_page = api_.get_user_likes_page(200, next_href);
-                        if (!next_page || likes_fetch_generation_.load() != current_gen || !is_running_) {
+                    while (!hit_existing && is_running_ && likes_fetch_generation_.load() == current_gen) {
+                        auto page_res = next_href.empty() ? api_.get_user_likes_page(50, "") : api_.get_user_likes_page(50, next_href);
+                        if (!page_res || likes_fetch_generation_.load() != current_gen || !is_running_) {
                             break;
                         }
-                        if (next_page->tracks.empty()) {
+                        if (page_res->tracks.empty()) {
                             break;
                         }
-                        next_href = next_page->next_href;
-                        ui_event_channel_.push(AsyncUIEvent{
-                            .type = AsyncEventType::LikesTracksAppended,
-                            .tracks_payload = std::move(next_page->tracks)
-                        });
-                        screen_.PostEvent(Event::Custom);
-                        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+
+                        for (auto& t : page_res->tracks) {
+                            if (existing_likes_set.count(t.id) == 0) {
+                                diff_tracks.push_back(std::move(t));
+                            } else {
+                                hit_existing = true;
+                                break;
+                            }
+                        }
+
+                        next_href = page_res->next_href;
+                        if (hit_existing || next_href.empty()) {
+                            break;
+                        }
                     }
+
                     if (likes_fetch_generation_.load() == current_gen && is_running_) {
+                        if (!diff_tracks.empty()) {
+                            LOG_INFO("App", "Pre-pending " + std::to_string(diff_tracks.size()) + " newly liked track(s) diff");
+                            ui_event_channel_.push(AsyncUIEvent{
+                                .type = AsyncEventType::LikesTracksDiffPrepended,
+                                .tracks_payload = std::move(diff_tracks)
+                            });
+                        } else {
+                            LOG_INFO("App", "Likes list is already completely up to date. No diff to load.");
+                        }
                         ui_event_channel_.push(AsyncUIEvent{
                             .type = AsyncEventType::LikesFullyLoaded
                         });
                         screen_.PostEvent(Event::Custom);
                     }
                 } else {
-                    LOG_WARN("App", "Could not load user likes: " + page_res.error().message);
-                    ui_event_channel_.push(AsyncUIEvent{
-                        .type = AsyncEventType::ErrorMessage,
-                        .text_payload = page_res.error().message
-                    });
-                    screen_.PostEvent(Event::Custom);
+                    LOG_INFO("App", "Initial load of user likes (page 1)...");
+                    auto page_res = api_.get_user_likes_page(200, "");
+                    if (likes_fetch_generation_.load() != current_gen || !is_running_) {
+                        return;
+                    }
+                    if (page_res) {
+                        LOG_INFO("App", "Likes page 1 returned " + std::to_string(page_res->tracks.size()) + " tracks");
+                        std::string next_href = page_res->next_href;
+                        ui_event_channel_.push(AsyncUIEvent{
+                            .type = AsyncEventType::LikesTracksReady,
+                            .tracks_payload = std::move(page_res->tracks)
+                        });
+                        screen_.PostEvent(Event::Custom);
+
+                        // Concurrently fetch all remaining pages in batches of 200
+                        while (!next_href.empty() && is_running_ && likes_fetch_generation_.load() == current_gen) {
+                            auto next_page = api_.get_user_likes_page(200, next_href);
+                            if (!next_page || likes_fetch_generation_.load() != current_gen || !is_running_) {
+                                break;
+                            }
+                            if (next_page->tracks.empty()) {
+                                break;
+                            }
+                            next_href = next_page->next_href;
+                            ui_event_channel_.push(AsyncUIEvent{
+                                .type = AsyncEventType::LikesTracksAppended,
+                                .tracks_payload = std::move(next_page->tracks)
+                            });
+                            screen_.PostEvent(Event::Custom);
+                            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+                        }
+                        if (likes_fetch_generation_.load() == current_gen && is_running_) {
+                            ui_event_channel_.push(AsyncUIEvent{
+                                .type = AsyncEventType::LikesFullyLoaded
+                            });
+                            screen_.PostEvent(Event::Custom);
+                        }
+                    } else {
+                        LOG_WARN("App", "Could not load user likes: " + page_res.error().message);
+                        ui_event_channel_.push(AsyncUIEvent{
+                            .type = AsyncEventType::ErrorMessage,
+                            .text_payload = page_res.error().message
+                        });
+                        screen_.PostEvent(Event::Custom);
+                    }
                 }
                 break;
             }
@@ -1415,7 +1473,27 @@ void App::process_async_events() {
                     std::make_move_iterator(evt.tracks_payload.end())
                 );
                 break;
+            case AsyncEventType::LikesTracksDiffPrepended:
+                if (cache_manager_) {
+                    std::vector<uint64_t> liked_ids;
+                    liked_ids.reserve(evt.tracks_payload.size());
+                    for (const auto& t : evt.tracks_payload) {
+                        liked_ids.push_back(t.id);
+                    }
+                    cache_manager_->sync_liked_tracks(liked_ids);
+                }
+                if (queue_source_is_likes_) {
+                    state_.queue.append_tracks_and_update_shuffle(evt.tracks_payload);
+                }
+                state_.likes_tracks.insert(
+                    state_.likes_tracks.begin(),
+                    std::make_move_iterator(evt.tracks_payload.begin()),
+                    std::make_move_iterator(evt.tracks_payload.end())
+                );
+                state_.notify("Likes updated: +" + std::to_string(evt.tracks_payload.size()) + " new track(s)", false, 3);
+                break;
             case AsyncEventType::LikesFullyLoaded:
+                state_.is_loading = false;
                 if (queue_source_is_likes_) {
                     std::string msg = "Likes library completely loaded: " + std::to_string(state_.queue.tracks.size()) + " tracks queued";
                     if (state_.queue.shuffle) {

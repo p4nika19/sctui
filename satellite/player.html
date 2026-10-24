@@ -45,21 +45,34 @@
 
           const isHls = streamUrl.includes('.m3u8') || streamUrl.includes('/hls') || streamUrl.includes('/cbcs') || streamUrl.includes('/cenc');
 
+          const baseLicenseUrl = 'https://license.media-streaming.soundcloud.cloud/playback/widevine';
+          const fullLicenseUrl = licenseToken
+            ? (baseLicenseUrl + '?license_token=' + encodeURIComponent(licenseToken))
+            : baseLicenseUrl;
+
           if (isHls && window.Hls && window.Hls.isSupported()) {
             const hlsConfig = {
-              enableWorker: true,
+              enableWorker: false,
               emeEnabled: true,
-              widevineLicenseUrl: 'https://license.media-streaming.soundcloud.cloud/playback/widevine',
+              widevineLicenseUrl: fullLicenseUrl,
               drmSystems: {
                 'com.widevine.alpha': {
-                  licenseUrl: 'https://license.media-streaming.soundcloud.cloud/playback/widevine',
-                  headers: licenseToken ? { 'Authorization': 'Bearer ' + licenseToken } : {}
+                  licenseUrl: fullLicenseUrl
                 }
               },
-              licenseXhrSetup: function(xhr, url, keySystem) {
-                if (licenseToken) {
-                  xhr.setRequestHeader('Authorization', 'Bearer ' + licenseToken);
+              licenseXhrSetup: function(xhr, url, keySystem, data) {
+                try {
+                  const u = new URL(url);
+                  if (licenseToken && !u.searchParams.has('license_token')) {
+                    u.searchParams.set('license_token', licenseToken);
+                  }
+                  xhr.open('POST', u.toString(), true);
+                  xhr.setRequestHeader('Content-Type', 'application/octet-stream');
+                  xhr.responseType = 'arraybuffer';
+                } catch (e) {
+                  console.error('licenseXhrSetup error:', e);
                 }
+                return data;
               }
             };
 
@@ -81,20 +94,16 @@
 
             hls.on(window.Hls.Events.ERROR, (event, data) => {
               if (data && data.fatal) {
-                window.sctuiBridge.sendEvent({
-                  type: 'error',
-                  message: 'HLS fatal error: ' + data.type + ' (' + data.details + ')'
-                });
-                switch (data.type) {
-                  case window.Hls.ErrorTypes.NETWORK_ERROR:
-                    hls.startLoad();
-                    break;
-                  case window.Hls.ErrorTypes.MEDIA_ERROR:
-                    hls.recoverMediaError();
-                    break;
-                  default:
-                    cleanupHls();
-                    break;
+                if (data.type === window.Hls.ErrorTypes.MEDIA_ERROR) {
+                  hls.recoverMediaError();
+                } else if (data.type === window.Hls.ErrorTypes.NETWORK_ERROR) {
+                  hls.startLoad();
+                } else {
+                  window.sctuiBridge.sendEvent({
+                    type: 'error',
+                    message: 'HLS unrecoverable error: ' + data.details
+                  });
+                  cleanupHls();
                 }
               }
             });
@@ -145,7 +154,8 @@
         try {
           cleanupHls();
           audio.pause();
-          audio.src = '';
+          audio.removeAttribute('src');
+          audio.load();
           window.sctuiBridge.sendEvent({
             type: 'state',
             playback_state: 'stopped',
@@ -207,6 +217,9 @@
     });
 
     audio.addEventListener('error', () => {
+      if (!audio.src || audio.src === window.location.href) {
+        return;
+      }
       const msg = audio.error ? (audio.error.message || ('Media error code ' + audio.error.code)) : 'Unknown audio error';
       window.sctuiBridge.sendEvent({
         type: 'error',
