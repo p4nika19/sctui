@@ -1,0 +1,53 @@
+#pragma once
+
+#include <string>
+#include <vector>
+#include <optional>
+#include <cstdint>
+
+namespace sctui::models {
+
+struct ColorRGB {
+    uint8_t r{255};
+    uint8_t g{85};
+    uint8_t b{0};
+
+    constexpr bool operator==(const ColorRGB& other) const = default;
+};
+
+struct CoverArtImage {
+    int width{0};
+    int height{0};
+    std::vector<ColorRGB> pixels;
+    std::string png_base64;
+    std::vector<uint8_t> raw_image_bytes;
+};
+
+struct UserProfile {
+    uint64_t id{0};
+    std::string username;
+    std::string permalink;
+    std::string permalink_url;
+    std::string avatar_url;
+    std::string description;
+    std::string country;
+    std::string city;
+    std::string plan;
+    std::string first_name;
+    std::string last_name;
+    std::string full_name;
+    std::string primary_email;
+    std::string created_at;
+    bool is_verified{false};
+    bool is_pro{false};
+    uint64_t followers_count{0};
+    uint64_t followings_count{0};
+    uint64_t track_count{0};
+    uint64_t likes_count{0};
+    uint64_t playlist_count{0};
+    uint64_t reposts_count{0};
+
+    std::optional<CoverArtImage> avatar_image;
+};
+
+} // namespace sctui::models

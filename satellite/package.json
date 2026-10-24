@@ -1,0 +1,13 @@
+{
+  "name": "sctui-drm-satellite",
+  "version": "1.0.0",
+  "description": "Minimal, headless castlabs-electron DRM audio playback satellite daemon for SCTUI",
+  "main": "main.js",
+  "scripts": {
+    "start": "castlabs-electron main.js"
+  },
+  "dependencies": {
+    "@castlabs/electron": "^31.0.0"
+  },
+  "private": true
+}

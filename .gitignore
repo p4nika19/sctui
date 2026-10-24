@@ -1,0 +1,15 @@
+# Xmake cache
+.xmake/
+build/
+
+# Satellite node_modules
+satellite/node_modules/
+
+# Logs
+*.log
+
+# MacOS Cache
+.DS_Store
+
+
+

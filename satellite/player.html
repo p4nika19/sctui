@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>SCTUI DRM Satellite Player</title>
+</head>
+<body style="background: black; margin: 0; overflow: hidden;">
+  <audio id="audio-elem" preload="auto"></audio>
+  <script>
+    const audio = document.getElementById('audio-elem');
+    let currentTrackId = 0;
+
+    if (window.sctuiBridge) {
+      window.sctuiBridge.onCommand('cmd-play', (payload) => {
+        try {
+          currentTrackId = payload.track_id || 0;
+          if (payload.stream_url) {
+            audio.src = payload.stream_url;
+            audio.currentTime = 0;
+            const playPromise = audio.play();
+            if (playPromise !== undefined) {
+              playPromise.catch((err) => {
+                window.sctuiBridge.sendEvent({
+                  type: 'error',
+                  message: err ? err.message : 'Audio play() rejected'
+                });
+              });
+            }
+          }
+        } catch (e) {
+          window.sctuiBridge.sendEvent({ type: 'error', message: e.message });
+        }
+      });
+
+      window.sctuiBridge.onCommand('cmd-pause', () => {
+        try { audio.pause(); } catch (e) {}
+      });
+
+      window.sctuiBridge.onCommand('cmd-resume', () => {
+        try { audio.play(); } catch (e) {}
+      });
+
+      window.sctuiBridge.onCommand('cmd-seek', (posMs) => {
+        try {
+          if (!isNaN(posMs)) {
+            audio.currentTime = Math.max(0, posMs / 1000);
+          }
+        } catch (e) {}
+      });
+
+      window.sctuiBridge.onCommand('cmd-volume', (vol) => {
+        try {
+          if (!isNaN(vol)) {
+            audio.volume = Math.max(0.0, Math.min(1.0, vol));
+          }
+        } catch (e) {}
+      });
+
+      window.sctuiBridge.onCommand('cmd-stop', () => {
+        try {
+          audio.pause();
+          audio.src = '';
+          window.sctuiBridge.sendEvent({
+            type: 'state',
+            playback_state: 'stopped',
+            position_ms: 0,
+            duration_ms: 0
+          });
+        } catch (e) {}
+      });
+    }
+
+    // Audio element event listeners
+    let lastTimeUpdateMs = 0;
+    audio.addEventListener('timeupdate', () => {
+      const now = Date.now();
+      if (now - lastTimeUpdateMs >= 250) {
+        lastTimeUpdateMs = now;
+        window.sctuiBridge.sendEvent({
+          type: 'timeupdate',
+          position_ms: Math.round(audio.currentTime * 1000),
+          duration_ms: Math.round((audio.duration || 0) * 1000)
+        });
+      }
+    });
+
+    audio.addEventListener('playing', () => {
+      window.sctuiBridge.sendEvent({
+        type: 'state',
+        playback_state: 'playing',
+        position_ms: Math.round(audio.currentTime * 1000),
+        duration_ms: Math.round((audio.duration || 0) * 1000)
+      });
+    });
+
+    audio.addEventListener('pause', () => {
+      if (!audio.ended) {
+        window.sctuiBridge.sendEvent({
+          type: 'state',
+          playback_state: 'paused',
+          position_ms: Math.round(audio.currentTime * 1000),
+          duration_ms: Math.round((audio.duration || 0) * 1000)
+        });
+      }
+    });
+
+    audio.addEventListener('waiting', () => {
+      window.sctuiBridge.sendEvent({
+        type: 'state',
+        playback_state: 'buffering',
+        position_ms: Math.round(audio.currentTime * 1000),
+        duration_ms: Math.round((audio.duration || 0) * 1000)
+      });
+    });
+
+    audio.addEventListener('ended', () => {
+      window.sctuiBridge.sendEvent({
+        type: 'finished',
+        track_id: currentTrackId
+      });
+    });
+
+    audio.addEventListener('error', () => {
+      const msg = audio.error ? (audio.error.message || ('Media error code ' + audio.error.code)) : 'Unknown audio error';
+      window.sctuiBridge.sendEvent({
+        type: 'error',
+        message: msg
+      });
+    });
+  </script>
+</body>
+</html>
