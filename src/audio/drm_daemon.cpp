@@ -68,10 +68,21 @@ DrmSatelliteDaemon::~DrmSatelliteDaemon() {
 }
 
 std::string DrmSatelliteDaemon::find_executable() const {
-    // 1. Direct binary in node_modules/electron/dist/electron
-    std::filesystem::path dist_electron = satellite_dir_ / "node_modules" / "electron" / "dist" / "electron";
-    if (std::filesystem::exists(dist_electron)) {
-        return dist_electron.string();
+    // Check direct binary in node_modules/electron/dist/
+    std::filesystem::path dist_dir = satellite_dir_ / "node_modules" / "electron" / "dist";
+    std::filesystem::path electron_bin = dist_dir / "electron";
+
+    if (std::filesystem::exists(dist_dir) && std::filesystem::exists(electron_bin)) {
+        // Ensure sctui-drm-satellite and castlabs-electron symlinks exist so btop and ps clearly display it
+        std::error_code ec;
+        std::filesystem::path named_symlink = dist_dir / "castlabs-electron";
+        if (!std::filesystem::exists(named_symlink, ec)) {
+            std::filesystem::create_symlink("electron", named_symlink, ec);
+        }
+        if (!ec && std::filesystem::exists(named_symlink)) {
+            return named_symlink.string();
+        }
+        return electron_bin.string();
     }
 
     // 2. Local electron wrapper (.bin/electron)
@@ -141,6 +152,10 @@ bool DrmSatelliteDaemon::start() {
         // Child process (Satellite Daemon)
         // Ensure child terminates cleanly if parent dies
         prctl(PR_SET_PDEATHSIG, SIGTERM);
+
+        // Remove environment variables that break Electron zygote or force node mode
+        ::unsetenv("CHROME_DESKTOP");
+        ::unsetenv("ELECTRON_RUN_AS_NODE");
 
         // Redirect stdin and stdout to pipes
         dup2(stdin_pipe[0], STDIN_FILENO);
@@ -272,6 +287,11 @@ void DrmSatelliteDaemon::send_command(const std::string& json_line) {
 void DrmSatelliteDaemon::play(uint64_t track_id, const std::string& stream_url) {
     if (!is_running_.load()) {
         if (!start()) return;
+    }
+
+    // Wait briefly for daemon readiness (up to 1.5s) if it was just launched
+    for (int i = 0; i < 30 && !is_ready_.load() && is_running_.load(); ++i) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
     }
 
     nlohmann::json cmd;

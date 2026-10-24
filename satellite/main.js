@@ -3,34 +3,40 @@
  * Powered by @castlabs/electron for Google Widevine CDM + VMP support.
  */
 
+'use strict';
+
 const electron = require('electron');
 const { app, session, BrowserWindow, ipcMain } = electron;
 const components = electron.components;
+const http = require('http');
+const fs = require('fs');
 const path = require('path');
 const readline = require('readline');
+const util = require('util');
 
-// Command-line optimization switches for ultra-low resource usage
-app.commandLine.appendSwitch('disable-gpu');
-app.commandLine.appendSwitch('disable-gpu-compositing');
-app.commandLine.appendSwitch('disable-software-rasterizer');
-app.commandLine.appendSwitch('disable-dev-shm-usage');
-app.commandLine.appendSwitch('disable-background-timer-throttling');
-app.commandLine.appendSwitch('disable-renderer-backgrounding');
+app.setName('sctui-drm-satellite');
+process.title = 'sctui-drm-satellite';
+
+// Optimized Chromium flags (consistent with CastLabs / Applejack best practices)
 app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
-app.commandLine.appendSwitch('disable-features', 'PaintHolding,CalculateNativeWinOcclusion,SpareRendererForSitePerProcess');
-app.commandLine.appendSwitch('no-sandbox');
+app.commandLine.appendSwitch('disable-features', 'HardwareMediaKeyHandling');
+app.commandLine.appendSwitch('disk-cache-size', String(256 * 1024 * 1024));
 
-// Strict stderr logger to keep stdout clean for NDJSON IPC
+// Persistent profile for Widevine CDM keys/certificates
+const defaultProfile = path.join(app.getPath('appData'), 'sctui-satellite');
+app.setPath('userData', defaultProfile);
+
+// Strict stderr logger to keep stdout 100% clean for NDJSON IPC
 function logDebug(...args) {
-  process.stderr.write('[Satellite:DEBUG] ' + args.join(' ') + '\n');
+  process.stderr.write('[Satellite:DEBUG] ' + util.format(...args) + '\n');
 }
 
 function logInfo(...args) {
-  process.stderr.write('[Satellite:INFO] ' + args.join(' ') + '\n');
+  process.stderr.write('[Satellite:INFO] ' + util.format(...args) + '\n');
 }
 
 function logError(...args) {
-  process.stderr.write('[Satellite:ERROR] ' + args.join(' ') + '\n');
+  process.stderr.write('[Satellite:ERROR] ' + util.format(...args) + '\n');
 }
 
 // IPC Output Helper: newline-delimited JSON strictly to stdout
@@ -51,6 +57,7 @@ if (parentPid > 1) {
       cleanupAndExit(0);
     }
   }, 1000);
+  ppidCheckInterval.unref();
 }
 
 // Signal handlers
@@ -61,12 +68,67 @@ process.on('SIGINT', () => cleanupAndExit(0));
 
 function cleanupAndExit(code = 0) {
   try {
-    app.quit();
+    if (localServer) {
+      localServer.close();
+    }
+  } catch (e) {}
+  try {
+    app.exit(code);
   } catch (e) {}
   process.exit(code);
 }
 
 let win = null;
+let isPageReady = false;
+let pendingPlay = null;
+let localServer = null;
+let localPort = 47823;
+
+function startLocalServer() {
+  const htmlPath = path.join(__dirname, 'player.html');
+  const hlsPath = path.join(__dirname, 'hls.min.js');
+
+  const createHandler = () => (req, res) => {
+    const u = req.url || '';
+    if (u === '/' || u.startsWith('/player.html')) {
+      res.writeHead(200, {
+        'Content-Type': 'text/html; charset=utf-8',
+        'Cache-Control': 'no-store'
+      });
+      res.end(fs.readFileSync(htmlPath));
+    } else if (u.startsWith('/hls.min.js')) {
+      res.writeHead(200, {
+        'Content-Type': 'application/javascript; charset=utf-8',
+        'Cache-Control': 'no-store'
+      });
+      res.end(fs.readFileSync(hlsPath));
+    } else {
+      res.writeHead(404);
+      res.end();
+    }
+  };
+
+  return new Promise((resolve, reject) => {
+    const srv = http.createServer(createHandler());
+    srv.once('error', (err) => {
+      if (err.code === 'EADDRINUSE') {
+        const fallback = http.createServer(createHandler());
+        fallback.listen(0, '127.0.0.1', () => {
+          localServer = fallback;
+          localPort = fallback.address().port;
+          resolve(`http://127.0.0.1:${localPort}/player.html`);
+        });
+      } else {
+        reject(err);
+      }
+    });
+
+    srv.listen(localPort, '127.0.0.1', () => {
+      localServer = srv;
+      resolve(`http://127.0.0.1:${localPort}/player.html`);
+    });
+  });
+}
 
 // Readline interface for NDJSON over stdin
 const rl = readline.createInterface({
@@ -102,8 +164,10 @@ function handleCommand(cmd) {
       break;
 
     case 'play':
-      if (win && !win.isDestroyed()) {
+      if (isPageReady && win && !win.isDestroyed()) {
         win.webContents.send('cmd-play', cmd);
+      } else {
+        pendingPlay = cmd;
       }
       break;
 
@@ -133,6 +197,7 @@ function handleCommand(cmd) {
       break;
 
     case 'stop':
+      pendingPlay = null;
       if (win && !win.isDestroyed()) {
         win.webContents.send('cmd-stop');
       }
@@ -158,6 +223,8 @@ ipcMain.on('player-event', (event, eventObj) => {
   }
 });
 
+app.on('window-all-closed', () => {}); // Keep daemon running headless
+
 // Create headless invisible window when Electron is ready
 app.whenReady().then(async () => {
   if (components) {
@@ -169,15 +236,17 @@ app.whenReady().then(async () => {
     }
   }
 
+  const sess = session.fromPartition('persist:sctui');
+
   // Grant mediaKeySystem (EME) permissions for Widevine CDM
-  session.defaultSession.setPermissionRequestHandler((webContents, permission, callback) => {
+  sess.setPermissionRequestHandler((webContents, permission, callback) => {
     if (permission === 'mediaKeySystem' || permission === 'media') {
       return callback(true);
     }
     callback(false);
   });
 
-  session.defaultSession.setPermissionCheckHandler((webContents, permission) => {
+  sess.setPermissionCheckHandler((webContents, permission) => {
     if (permission === 'mediaKeySystem' || permission === 'media') {
       return true;
     }
@@ -185,13 +254,18 @@ app.whenReady().then(async () => {
   });
 
   // Ensure requests to SoundCloud streaming and license endpoints contain valid Origin headers
-  session.defaultSession.webRequest.onBeforeSendHeaders((details, callback) => {
+  sess.webRequest.onBeforeSendHeaders((details, callback) => {
     const headers = details.requestHeaders || {};
-    headers['Origin'] = 'https://soundcloud.com';
-    headers['Referer'] = 'https://soundcloud.com/';
-    headers['User-Agent'] = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36';
+    if (details.url.includes('soundcloud') || details.url.includes('media-streaming')) {
+      headers['Origin'] = 'https://soundcloud.com';
+      headers['Referer'] = 'https://soundcloud.com/';
+      headers['User-Agent'] = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36';
+    }
     callback({ cancel: false, requestHeaders: headers });
   });
+
+  const pageUrl = await startLocalServer();
+  logInfo('Local player server ready at ' + pageUrl);
 
   win = new BrowserWindow({
     show: false,
@@ -202,17 +276,21 @@ app.whenReady().then(async () => {
     hasShadow: false,
     focusable: false,
     webPreferences: {
+      partition: 'persist:sctui',
       nodeIntegration: false,
       contextIsolation: true,
-      webSecurity: false, // Bypass Same-Origin restrictions for player.html accessing CDN & license server
       backgroundThrottling: false,
+      spellcheck: false,
       preload: path.join(__dirname, 'preload.js')
     }
   });
 
-  win.loadFile(path.join(__dirname, 'player.html'));
+  win.webContents.on('console-message', (e) => {
+    logDebug('[Page]', e.message);
+  });
 
   win.webContents.on('did-finish-load', () => {
+    isPageReady = true;
     sendIPC({
       type: 'ready',
       version: '1.0.0',
@@ -220,10 +298,17 @@ app.whenReady().then(async () => {
       pid: process.pid
     });
     logInfo('Headless DRM satellite initialized with Widevine CDM support. PID: ' + process.pid);
+    if (pendingPlay) {
+      logInfo('Dispatching queued play command');
+      win.webContents.send('cmd-play', pendingPlay);
+      pendingPlay = null;
+    }
   });
 
   win.webContents.on('crashed', (event, killed) => {
     logError('Renderer process crashed! killed=' + killed);
     sendIPC({ type: 'error', message: 'Renderer crashed' });
   });
+
+  win.loadURL(pageUrl);
 });

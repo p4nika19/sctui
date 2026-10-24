@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <title>SCTUI DRM Satellite Player</title>
-  <script src="hls.min.js"></script>
+  <script src="/hls.min.js"></script>
 </head>
 <body style="background: black; margin: 0; overflow: hidden;">
   <audio id="audio-elem" preload="auto"></audio>
@@ -43,7 +43,9 @@
             return;
           }
 
-          const isHls = streamUrl.includes('.m3u8') || streamUrl.includes('/hls') || streamUrl.includes('/cbcs') || streamUrl.includes('/cenc');
+          const isHls = streamUrl.includes('.m3u8') || streamUrl.includes('/hls') ||
+                        streamUrl.includes('/cenc') || streamUrl.includes('/cbcs') ||
+                        streamUrl.includes('media-streaming.soundcloud.cloud');
 
           const baseLicenseUrl = 'https://license.media-streaming.soundcloud.cloud/playback/widevine';
           const fullLicenseUrl = licenseToken
@@ -68,9 +70,8 @@
                   }
                   xhr.open('POST', u.toString(), true);
                   xhr.setRequestHeader('Content-Type', 'application/octet-stream');
-                  xhr.responseType = 'arraybuffer';
                 } catch (e) {
-                  console.error('licenseXhrSetup error:', e);
+                  console.error('[licenseXhrSetup error]', e);
                 }
                 return data;
               }
@@ -101,14 +102,14 @@
                 } else {
                   window.sctuiBridge.sendEvent({
                     type: 'error',
-                    message: 'HLS unrecoverable error: ' + data.details
+                    message: 'HLS fatal error: ' + (data.details || 'unknown')
                   });
                   cleanupHls();
                 }
               }
             });
           } else {
-            // Direct playback for progressive / raw streams
+            // Direct playback for progressive streams
             audio.src = streamUrl;
             audio.currentTime = 0;
             const playPromise = audio.play();
@@ -217,7 +218,7 @@
     });
 
     audio.addEventListener('error', () => {
-      if (!audio.src || audio.src === window.location.href) {
+      if (!audio.src || audio.src === window.location.href || audio.src === '') {
         return;
       }
       const msg = audio.error ? (audio.error.message || ('Media error code ' + audio.error.code)) : 'Unknown audio error';
