@@ -126,24 +126,14 @@ struct AudioEngine::Impl {
 
         if (self->is_playing_drm.load(std::memory_order_relaxed)) {
             std::memset(pOutput, 0, frameCount * sizeof(float) * 2);
-            if (self->state.load(std::memory_order_relaxed) == PlaybackState::Playing) {
-                float vol = self->volume_percent.load(std::memory_order_relaxed);
-                float norm_vol = std::clamp(vol / 100.0f, 0.0f, 1.5f);
-                float vis_scale = (norm_vol <= 0.001f) ? 0.0f : (norm_vol <= 1.0f ? std::pow(std::sin(norm_vol * 1.57079632679f), 1.35f) : 1.0f);
-                uint64_t pos = self->position_ms.load(std::memory_order_relaxed);
-                for (size_t b = 0; b < VisualizerBandsCount; ++b) {
-                    float phase = static_cast<float>(pos % 3000) / 3000.0f * 6.2831853f + static_cast<float>(b) * 0.45f;
-                    float val = (0.35f + 0.35f * std::sin(phase)) * vis_scale;
-                    float old = self->visualizer_bands[b].load(std::memory_order_relaxed);
-                    self->visualizer_bands[b].store(std::max(val, old * 0.82f), std::memory_order_relaxed);
-                }
-                self->rms_left.store(0.3f * norm_vol, std::memory_order_relaxed);
-                self->rms_right.store(0.3f * norm_vol, std::memory_order_relaxed);
-            } else {
+            // Smoothly decay visualizer bars if paused or stopped
+            if (self->state.load(std::memory_order_relaxed) != PlaybackState::Playing) {
                 for (size_t b = 0; b < VisualizerBandsCount; ++b) {
                     float old = self->visualizer_bands[b].load(std::memory_order_relaxed);
-                    self->visualizer_bands[b].store(old * 0.8f, std::memory_order_relaxed);
+                    self->visualizer_bands[b].store(old * 0.80f, std::memory_order_relaxed);
                 }
+                self->rms_left.store(0.0f, std::memory_order_relaxed);
+                self->rms_right.store(0.0f, std::memory_order_relaxed);
             }
             return;
         }
@@ -287,6 +277,34 @@ struct AudioEngine::Impl {
                 drm_daemon->set_on_error([this](const std::string& err) {
                     LOG_ERROR("AudioEngine", "DRM Daemon error: " + err);
                     state.store(PlaybackState::Error, std::memory_order_relaxed);
+                });
+                drm_daemon->set_on_spectrum([this](const std::array<float, VisualizerBandsCount>& bands) {
+                    if (state.load(std::memory_order_relaxed) != PlaybackState::Playing) {
+                        return;
+                    }
+                    float vol = volume_percent.load(std::memory_order_relaxed);
+                    float norm_vol = std::clamp(vol / 100.0f, 0.0f, 1.5f);
+                    float vis_scale;
+                    if (norm_vol <= 0.001f) {
+                        vis_scale = 0.0f;
+                    } else if (norm_vol <= 1.0f) {
+                        vis_scale = std::pow(std::sin(norm_vol * 1.57079632679f), 1.35f);
+                    } else {
+                        vis_scale = 1.0f + std::tanh((norm_vol - 1.0f) * 0.8f) * 0.22f;
+                    }
+
+                    float sum_sq = 0.0f;
+                    for (size_t b = 0; b < VisualizerBandsCount; ++b) {
+                        float boost = (b < 6) ? 1.25f : 1.0f;
+                        float scaled = std::clamp(bands[b] * vis_scale * boost, 0.0f, 1.0f);
+                        float old_val = visualizer_bands[b].load(std::memory_order_relaxed);
+                        float smoothed = std::max(scaled, old_val * 0.80f);
+                        visualizer_bands[b].store(smoothed, std::memory_order_relaxed);
+                        sum_sq += scaled * scaled;
+                    }
+                    float rms = std::sqrt(sum_sq / static_cast<float>(VisualizerBandsCount));
+                    rms_left.store(rms, std::memory_order_relaxed);
+                    rms_right.store(rms, std::memory_order_relaxed);
                 });
             }
 

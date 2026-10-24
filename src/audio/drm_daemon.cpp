@@ -353,6 +353,10 @@ void DrmSatelliteDaemon::set_on_error(ErrorCallback cb) {
     on_error_ = std::move(cb);
 }
 
+void DrmSatelliteDaemon::set_on_spectrum(SpectrumCallback cb) {
+    on_spectrum_ = std::move(cb);
+}
+
 void DrmSatelliteDaemon::read_loop(std::stop_token stop_tok) {
     std::string buffer;
     std::array<char, 4096> chunk{};
@@ -419,6 +423,20 @@ void DrmSatelliteDaemon::handle_ipc_message(const std::string& line) {
             }
 
             if (on_time_update_) on_time_update_(pos, dur);
+        } else if (type == "spectrum") {
+            if (j.contains("bands") && j["bands"].is_array()) {
+                const auto& arr = j["bands"];
+                std::array<float, VisualizerBandsCount> spectrum{};
+                size_t count = std::min(arr.size(), VisualizerBandsCount);
+                for (size_t i = 0; i < count; ++i) {
+                    if (arr[i].is_number()) {
+                        spectrum[i] = arr[i].get<float>();
+                    }
+                }
+                if (on_spectrum_) {
+                    on_spectrum_(spectrum);
+                }
+            }
         } else if (type == "finished") {
             uint64_t track_id = j.value("track_id", 0ULL);
             {

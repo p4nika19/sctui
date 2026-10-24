@@ -24,6 +24,7 @@ public:
     using TimeUpdateCallback = std::function<void(uint64_t pos_ms, uint64_t dur_ms)>;
     using FinishedCallback = std::function<void(uint64_t track_id)>;
     using ErrorCallback = std::function<void(const std::string& error)>;
+    using SpectrumCallback = std::function<void(const std::array<float, VisualizerBandsCount>& bands)>;
 
     explicit DrmSatelliteDaemon(std::filesystem::path satellite_dir = "satellite");
     ~DrmSatelliteDaemon();
@@ -49,6 +50,7 @@ public:
     void set_on_time_update(TimeUpdateCallback cb);
     void set_on_finished(FinishedCallback cb);
     void set_on_error(ErrorCallback cb);
+    void set_on_spectrum(SpectrumCallback cb);
 
 private:
     std::filesystem::path satellite_dir_;
@@ -66,6 +68,7 @@ private:
     TimeUpdateCallback on_time_update_;
     FinishedCallback on_finished_;
     ErrorCallback on_error_;
+    SpectrumCallback on_spectrum_;
 
     std::jthread reader_thread_;
 

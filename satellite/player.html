@@ -11,8 +11,60 @@
     const audio = document.getElementById('audio-elem');
     let currentTrackId = 0;
     let hls = null;
+    let audioCtx = null;
+    let analyser = null;
+    let source = null;
+    let spectrumTimer = null;
+
+    function ensureAudioContext() {
+      if (audioCtx) return;
+      try {
+        audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        source = audioCtx.createMediaElementSource(audio);
+        analyser = audioCtx.createAnalyser();
+        analyser.fftSize = 64; // 32 frequency bins
+        analyser.smoothingTimeConstant = 0.6;
+        source.connect(analyser);
+        analyser.connect(audioCtx.destination);
+      } catch (e) {
+        console.error('[WebAudio init error]', e);
+      }
+    }
+
+    function startSpectrum() {
+      if (spectrumTimer) return;
+      ensureAudioContext();
+      if (audioCtx && audioCtx.state === 'suspended') {
+        audioCtx.resume().catch(() => {});
+      }
+      const data = new Uint8Array(analyser ? analyser.frequencyBinCount : 32);
+      spectrumTimer = setInterval(() => {
+        if (!analyser || audio.paused || audio.ended) {
+          stopSpectrum();
+          return;
+        }
+        analyser.getByteFrequencyData(data);
+        const bands = new Array(16);
+        for (let i = 0; i < 16; ++i) {
+          const v = Math.max(data[i * 2], data[i * 2 + 1]) / 255.0;
+          bands[i] = Math.round(v * 1000) / 1000;
+        }
+        window.sctuiBridge.sendEvent({
+          type: 'spectrum',
+          bands: bands
+        });
+      }, 35); // ~28 FPS in sync with SCTUI visualizer render loop
+    }
+
+    function stopSpectrum() {
+      if (spectrumTimer) {
+        clearInterval(spectrumTimer);
+        spectrumTimer = null;
+      }
+    }
 
     function cleanupHls() {
+      stopSpectrum();
       if (hls) {
         try {
           hls.destroy();
@@ -82,6 +134,7 @@
             hls.attachMedia(audio);
 
             hls.on(window.Hls.Events.MANIFEST_PARSED, () => {
+              ensureAudioContext();
               const playPromise = audio.play();
               if (playPromise !== undefined) {
                 playPromise.catch((err) => {
@@ -110,6 +163,7 @@
             });
           } else {
             // Direct playback for progressive streams
+            ensureAudioContext();
             audio.src = streamUrl;
             audio.currentTime = 0;
             const playPromise = audio.play();
@@ -128,11 +182,15 @@
       });
 
       window.sctuiBridge.onCommand('cmd-pause', () => {
+        stopSpectrum();
         try { audio.pause(); } catch (e) {}
       });
 
       window.sctuiBridge.onCommand('cmd-resume', () => {
-        try { audio.play(); } catch (e) {}
+        try {
+          audio.play();
+          startSpectrum();
+        } catch (e) {}
       });
 
       window.sctuiBridge.onCommand('cmd-seek', (posMs) => {
@@ -182,6 +240,7 @@
     });
 
     audio.addEventListener('playing', () => {
+      startSpectrum();
       window.sctuiBridge.sendEvent({
         type: 'state',
         playback_state: 'playing',
@@ -191,6 +250,7 @@
     });
 
     audio.addEventListener('pause', () => {
+      stopSpectrum();
       if (!audio.ended) {
         window.sctuiBridge.sendEvent({
           type: 'state',
@@ -211,6 +271,7 @@
     });
 
     audio.addEventListener('ended', () => {
+      stopSpectrum();
       window.sctuiBridge.sendEvent({
         type: 'finished',
         track_id: currentTrackId
@@ -218,6 +279,7 @@
     });
 
     audio.addEventListener('error', () => {
+      stopSpectrum();
       if (!audio.src || audio.src === window.location.href || audio.src === '') {
         return;
       }
