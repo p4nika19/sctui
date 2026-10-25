@@ -2,23 +2,7 @@
 
 A high-performance, responsive, and visually polished native Terminal User Interface (TUI) client for SoundCloud written in modern C++23.
 
-```text
-╭──────────────────────────────────────────────────────────────────────────────╮
-│  ☁ SOUNDCLOUD TUI │ 🔍 Search tracks, artists... │ [?] Help  [q] Exit        │
-├─────────┬────────────────────────────────────────────────────────────────────┤
-│   NAV   │  #  TITLE                          ARTIST       TIME               │
-│ ─────── │ ─── ────────────────────────────── ──────────── ────               │
-│ ▶ Search│  1  The Chillwave Tape Collection  Meredith J   05:28              │
-│   Stream│  2  Chillwave                      LSPLASH      03:51              │
-│   Likes │  3  Afterlife (Remix) 💖           Ark Patrol   02:03              │
-│   Playlists                                                                  │
-│   Queue │                                                                    │
-├─────────┴────────────────────────────────────────────────────────────────────┤
-│  ♫  The Chillwave Tape Collection • Meredith J     ▂▃▄▅▆▇█  🔊 75%           │
-│ 01:24 ━━━━━━━━━━━━━━━━━━━━━╸━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 05:28       │
-│  ▶ PLAYING  │ 🔀 SHUF │ 🔁 ALL │  [Space] Play/Pause [h/l] ±5s [+/-] Vol     │
-╰──────────────────────────────────────────────────────────────────────────────╯
-```
+<img width="1920" height="1080" alt="изображение" src="https://github.com/user-attachments/assets/458f4478-8845-4497-b9dd-ededb4d8cd8b" />
 
 ---
 
@@ -45,13 +29,17 @@ A high-performance, responsive, and visually polished native Terminal User Inter
 - **Terminal Graphics & Cover Art**:
   - Native high-res album cover art support via **Kitty Graphics Protocol**, **iTerm2 Inline Images**, and half-block ANSI fallbacks.
   - Perfectly proportioned square covers calibrated for monospace terminal cell ratios.
+
+<img width="1920" height="1080" alt="изображение" src="https://github.com/user-attachments/assets/eb834502-9930-4824-a689-62426a6a3bf5" />
+
 - **System Integration**:
   - **MPRIS 2.2 D-Bus Server** for seamless desktop media keys and widget controls (`playerctl`).
   - **Discord Rich Presence** showcasing current track, artist, and playback progress.
   - Multi-browser cookie extraction (Firefox, Chrome, Chromium, Brave, Edge, Opera, Vivaldi) for effortless one-click authentication.
 
----
+<img width="443" height="183" alt="изображение" src="https://github.com/user-attachments/assets/09adc152-6165-49af-9267-ca98b29cfb69" />
 
+---
 ## 🚀 Quick Automated Installation
 
 Open a terminal and run this single command:
