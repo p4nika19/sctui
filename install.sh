@@ -150,15 +150,22 @@ install_dependencies() {
     fi
 
     # Check if core tools are already present; if so, skip re-running sudo package manager
+    local tools=(clang mold git curl node npm make)
+    case "$pm" in
+        pacman|brew|apk|xbps)
+            tools+=(xmake)
+            ;;
+    esac
+
     local missing_tools=()
-    for bin in clang mold git curl node npm make; do
+    for bin in "${tools[@]}"; do
         if ! command -v "$bin" &>/dev/null; then
             missing_tools+=("$bin")
         fi
     done
 
     if [ ${#missing_tools[@]} -eq 0 ]; then
-        info "Core development tools (clang, mold, git, curl, node, npm, make) are already installed."
+        info "Core development tools (${tools[*]}) are already installed."
         return 0
     fi
 
@@ -166,7 +173,7 @@ install_dependencies() {
 
     case "$pm" in
         pacman)
-            $SUDO pacman -Sy --needed --noconfirm clang mold git curl nodejs npm libpulse alsa-lib sqlite openssl base-devel || fatal "Failed to install dependencies with pacman."
+            $SUDO pacman -Sy --needed --noconfirm clang mold git curl nodejs npm libpulse alsa-lib sqlite openssl base-devel xmake || fatal "Failed to install dependencies with pacman."
             ;;
         apt)
             $SUDO apt-get update
@@ -179,16 +186,16 @@ install_dependencies() {
             $SUDO zypper install -y -t package clang mold git curl nodejs npm libcurl-devel alsa-devel libpulse-devel systemd-devel sqlite3-devel libopenssl-devel gcc-c++ make || fatal "Failed to install dependencies with zypper."
             ;;
         apk)
-            $SUDO apk add clang mold git curl nodejs npm curl-dev alsa-lib-dev pulseaudio-dev sqlite-dev openssl-dev build-base || fatal "Failed to install dependencies with apk."
+            $SUDO apk add clang mold git curl nodejs npm curl-dev alsa-lib-dev pulseaudio-dev sqlite-dev openssl-dev build-base xmake || fatal "Failed to install dependencies with apk."
             ;;
         xbps)
-            $SUDO xbps-install -Sy clang mold git curl nodejs sqlite-devel libcurl-devel alsa-lib-devel pulseaudio-devel openssl-devel base-devel || fatal "Failed to install dependencies with xbps-install."
+            $SUDO xbps-install -Sy clang mold git curl nodejs sqlite-devel libcurl-devel alsa-lib-devel pulseaudio-devel openssl-devel base-devel xmake || fatal "Failed to install dependencies with xbps-install."
             ;;
         emerge)
             $SUDO emerge -v sys-devel/clang sys-devel/mold dev-vcs/git net-misc/curl net-libs/nodejs media-libs/alsa-lib media-libs/libpulse dev-db/sqlite dev-libs/openssl || fatal "Failed to install dependencies with emerge."
             ;;
         brew)
-            brew install llvm mold git curl node sqlite openssl || fatal "Failed to install dependencies with brew."
+            brew install llvm mold git curl node sqlite openssl xmake || fatal "Failed to install dependencies with brew."
             ;;
         unknown)
             print_manual_fallback
@@ -203,13 +210,27 @@ install_dependencies() {
 
 ensure_xmake() {
     export XMAKE_ROOT=y
+
+    # Prepend ~/.local/bin to PATH if directory exists, in case xmake or other tools were installed locally
+    if [ -d "$HOME/.local/bin" ] && [[ ":$PATH:" != *":$HOME/.local/bin:"* ]]; then
+        export PATH="$HOME/.local/bin:$PATH"
+    fi
+
     if ! command -v xmake &>/dev/null; then
         info "xmake build system was not found. Installing xmake..."
         curl -fsSL https://xmake.io/shget.text | bash
         export PATH="$HOME/.local/bin:$PATH"
+        export XMAKE_ROOTDIR="$HOME/.local/bin"
+        if [ -d "$HOME/.local/share/xmake" ]; then
+            export XMAKE_PROGRAM_DIR="$HOME/.local/share/xmake"
+        fi
         if [ -f "$HOME/.xmake/profile" ]; then
+            # Sourcing profile safely: ~/.xmake/profile evaluates unquoted $FISH_VERSION,
+            # which causes bash to abort immediately when set -u (nounset) is active.
+            set +u
             # shellcheck source=/dev/null
             source "$HOME/.xmake/profile" 2>/dev/null || true
+            set -u
         fi
         if ! command -v xmake &>/dev/null; then
             fatal "xmake installation finished but xmake binary was not found in PATH ($PATH)."
