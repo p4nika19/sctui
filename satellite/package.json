@@ -4,7 +4,8 @@
   "description": "Minimal, headless castlabs-electron DRM audio playback satellite daemon for SCTUI",
   "main": "main.js",
   "scripts": {
-    "start": "castlabs-electron main.js"
+    "start": "castlabs-electron main.js",
+    "postinstall": "node node_modules/electron/install.js"
   },
   "dependencies": {
     "electron": "git+https://github.com/castlabs/electron-releases.git#v44.9.3+wvcus"

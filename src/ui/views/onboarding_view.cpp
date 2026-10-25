@@ -1112,6 +1112,9 @@ Element OnboardingView::render_step4_installing_electron() {
     auto accent = state_.get_accent_color();
     clickable_zones_.clear();
 
+    int term_w = std::max(70, state_.terminal_width);
+    int card_width = std::clamp(term_w - 8, 64, 94);
+
     Elements body;
     body.push_back(text(""));
     body.push_back(text("Setting Up Widevine DRM Playback Engine") | color(Color::White) | bold | center);
@@ -1127,13 +1130,47 @@ Element OnboardingView::render_step4_installing_electron() {
 
     if (!install_electron_failed_) {
         card_content.push_back(text(" ⏳ Downloading Castlabs Electron (v44.9.3+wvcus)...") | color(Color::YellowLight) | bold);
-        card_content.push_back(text("    Command: " + std::string(audio::DrmSatelliteDaemon::ElectronInstallCommand)) | color(Color::GrayDark));
+        std::string cmd_str = "    Command: " + std::string(audio::DrmSatelliteDaemon::ElectronInstallCommand);
+        if (cmd_str.length() > static_cast<size_t>(card_width - 8)) {
+            card_content.push_back(text("    Command:") | color(Color::GrayDark));
+            card_content.push_back(text("      " + std::string(audio::DrmSatelliteDaemon::ElectronInstallCommand)) | color(Color::GrayDark));
+        } else {
+            card_content.push_back(text(cmd_str) | color(Color::GrayDark));
+        }
         card_content.push_back(text(""));
         card_content.push_back(text("    Please wait while Widevine CDM and VMP binaries are configured.") | color(Color::GrayLight));
         card_content.push_back(text("    SCTUI will automatically start once download completes.") | color(Color::GreenLight) | bold);
     } else {
         card_content.push_back(text(" ✖ Failed to download Castlabs Electron:") | color(Color::RedLight) | bold);
-        card_content.push_back(text("    " + install_electron_err_) | color(Color::RedLight));
+        card_content.push_back(text(""));
+
+        // Dynamically wrap long error message into multiple lines so it is never clipped
+        size_t max_err_line_len = static_cast<size_t>(std::max(40, card_width - 10));
+        std::istringstream err_stream(install_electron_err_);
+        std::string raw_paragraph;
+        while (std::getline(err_stream, raw_paragraph)) {
+            while (!raw_paragraph.empty() && (raw_paragraph.back() == '\r' || raw_paragraph.back() == ' ')) {
+                raw_paragraph.pop_back();
+            }
+            if (raw_paragraph.empty()) continue;
+
+            std::istringstream word_stream(raw_paragraph);
+            std::string word;
+            std::string cur_line;
+            while (word_stream >> word) {
+                if (cur_line.empty()) {
+                    cur_line = word;
+                } else if (cur_line.length() + 1 + word.length() <= max_err_line_len) {
+                    cur_line += " " + word;
+                } else {
+                    card_content.push_back(text("    " + cur_line) | color(Color::RedLight));
+                    cur_line = word;
+                }
+            }
+            if (!cur_line.empty()) {
+                card_content.push_back(text("    " + cur_line) | color(Color::RedLight));
+            }
+        }
         card_content.push_back(text(""));
 
         auto btn_retry = text(" [ 🔄 Retry Installation ] ")
@@ -1154,7 +1191,7 @@ Element OnboardingView::render_step4_installing_electron() {
         | borderRounded
         | color(!install_electron_failed_ ? accent : Color::RedLight)
         | bgcolor(Color::RGB(16, 16, 22))
-        | size(WIDTH, LESS_THAN, 82);
+        | size(WIDTH, EQUAL, card_width);
 
     body.push_back(hbox({ filler(), install_card, filler() }));
     return vbox(std::move(body));

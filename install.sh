@@ -182,6 +182,10 @@ setup_satellite() {
                 npm install --allow-git=all "https://github.com/castlabs/electron-releases#v44.9.3+wvcus" --save || {
                     warn "Automatic Castlabs Electron pre-download encountered an issue. sctui will attempt auto-download on first DRM launch."
                 }
+                if [ -f "node_modules/electron/install.js" ] && [ ! -f "node_modules/electron/dist/electron" ]; then
+                    info "Unpacking Castlabs Electron runtime binary..."
+                    (cd node_modules/electron && node install.js) || true
+                fi
             else
                 success "Castlabs Electron is already configured in satellite."
             fi

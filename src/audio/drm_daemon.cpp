@@ -259,7 +259,8 @@ bool DrmSatelliteDaemon::download_castlabs_electron(const std::filesystem::path&
                << "  \"description\": \"Minimal, headless castlabs-electron DRM audio playback satellite daemon for SCTUI\",\n"
                << "  \"main\": \"main.js\",\n"
                << "  \"scripts\": {\n"
-               << "    \"start\": \"castlabs-electron main.js\"\n"
+               << "    \"start\": \"castlabs-electron main.js\",\n"
+               << "    \"postinstall\": \"node node_modules/electron/install.js\"\n"
                << "  },\n"
                << "  \"dependencies\": {\n"
                << "    \"electron\": \"git+https://github.com/castlabs/electron-releases.git#v44.9.3+wvcus\"\n"
@@ -312,14 +313,52 @@ bool DrmSatelliteDaemon::download_castlabs_electron(const std::filesystem::path&
         return false;
     }
 
+    // Explicitly run install.js if dist/electron binary has not been unpacked yet
     std::filesystem::path dist_dir = sat_dir / "node_modules" / "electron" / "dist";
+    std::filesystem::path electron_bin = dist_dir / "electron";
+    std::filesystem::path install_js = sat_dir / "node_modules" / "electron" / "install.js";
+
+    if (!std::filesystem::exists(electron_bin, ec) && std::filesystem::exists(install_js, ec)) {
+        LOG_INFO("DrmDaemon", "Unpacking Castlabs Electron binary via node install.js");
+        std::string dl_cmd = "cd \"" + sat_dir.string() + "/node_modules/electron\" && node install.js 2>&1";
+        FILE* dl_pipe = ::popen(dl_cmd.c_str(), "r");
+        if (dl_pipe) {
+            std::string dl_out;
+            char dl_buf[256];
+            while (fgets(dl_buf, sizeof(dl_buf), dl_pipe) != nullptr) {
+                dl_out += dl_buf;
+            }
+            int dl_status = ::pclose(dl_pipe);
+            int dl_code = WIFEXITED(dl_status) ? WEXITSTATUS(dl_status) : -1;
+            if (dl_code != 0) {
+                LOG_ERROR("DrmDaemon", "node install.js failed (code " + std::to_string(dl_code) + "): " + dl_out);
+                if (error_msg) {
+                    *error_msg = "Electron binary unpack failed (code " + std::to_string(dl_code) + "): " + dl_out;
+                }
+                return false;
+            }
+        }
+    }
+
     std::filesystem::path named_symlink = dist_dir / "castlabs-electron";
     if (std::filesystem::exists(dist_dir, ec) && !std::filesystem::exists(named_symlink, ec)) {
         std::filesystem::create_symlink("electron", named_symlink, ec);
     }
 
     if (!is_castlabs_electron_installed(sat_dir)) {
-        if (error_msg) *error_msg = "Installation completed but Castlabs Electron binary validation failed in " + sat_dir.string();
+        std::string ver = get_installed_electron_version(sat_dir);
+        std::string details;
+        if (!std::filesystem::exists(electron_bin, ec)) {
+            details = "Executable missing at " + electron_bin.string();
+        } else if (ver.empty()) {
+            details = "Version file missing or unreadable in " + dist_dir.string();
+        } else {
+            details = "Version '" + ver + "' does not match required '44.9.3+wvcus'";
+        }
+        if (error_msg) {
+            *error_msg = "Castlabs Electron validation failed: " + details;
+        }
+        LOG_ERROR("DrmDaemon", "Binary validation failed in " + sat_dir.string() + ": " + details);
         return false;
     }
 
