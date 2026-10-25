@@ -1,15 +1,109 @@
-# Xmake cache
+# ==========================================
+# C++ Build & Toolchain Artifacts
+# ==========================================
 .xmake/
 build/
+bin/
+*.o
+*.obj
+*.a
+*.lib
+*.so
+*.dylib
+*.dll
+compile_commands.json
 
-# Satellite node_modules
+# Local binaries (if built or placed in project root)
+/sctui
+/test_suite
+
+# ==========================================
+# Castlabs Electron & Satellite Dependencies
+# (Downloaded automatically by program logic)
+# ==========================================
+node_modules/
+**/node_modules/
 satellite/node_modules/
+satellite/package-lock.json
+package-lock.json
+.package-lock.json
 
-# Logs
+# Electron runtime binaries, symlinks & resources
+electron
+castlabs-electron
+sctui-drm-satellite
+chrome-sandbox
+chrome_crashpad_handler
+libffmpeg.so
+libvk_swiftshader.so
+libvulkan.so*
+*.pak
+*.bin
+*.dat
+*.node
+locales/
+resources/
+
+# Electron download cache
+.electron/
+*.electron*
+
+# ==========================================
+# Runtime Data, Media & Cache
+# (Downloaded / created during playback & runs)
+# ==========================================
+cache/
+.cache/
+track_cache/
+cover_cache/
+covers/
+artworks/
+metadata.json
+config.json
+
+# Audio downloads & cached streams
+*.mp3
+*.opus
+*.m4a
+*.aac
+*.webm
+*.flac
+*.wav
+*.ogg
+
+# Session & Authentication dumps
+cookies.sqlite*
+cookies.json
+cookies.txt
+
+# ==========================================
+# Archives & Distribution Bundles
+# ==========================================
+*.tar
+*.tar.*
+*.tar.gz
+*.tar.xz
+*.tar.bz2
+*.zip
+*.7z
+*.rar
+sctui_*.tar.*
+
+# ==========================================
+# Logs & Diagnostic Files
+# ==========================================
 *.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
 
-# MacOS Cache
+# ==========================================
+# OS & Editor Files
+# ==========================================
 .DS_Store
-
-
-
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+*.swo
+*~

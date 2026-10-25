@@ -341,6 +341,7 @@ struct AppState {
     bool is_onboarding{false};
     bool drm_engine_enabled{true};
     bool download_drm_tracks_in_likes{true};
+    bool is_downloading_electron{false};
 
     // Likes cache downloading progress
     bool is_downloading_likes{false};
@@ -360,6 +361,14 @@ struct AppState {
 
     [[nodiscard]] bool is_ultrawide() const noexcept {
         return terminal_width >= 160;
+    }
+
+    [[nodiscard]] bool user_has_go() const noexcept {
+        return user_profile.has_value() && user_profile->has_go();
+    }
+
+    [[nodiscard]] bool user_has_go_plus() const noexcept {
+        return user_profile.has_value() && user_profile->has_go_plus();
     }
 
     void notify(std::string msg, bool is_error = false, int timeout_sec = 4) {

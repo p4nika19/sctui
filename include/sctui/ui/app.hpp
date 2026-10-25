@@ -48,7 +48,10 @@ enum class AsyncEventType {
     MprisPlayPause,
     MprisStop,
     UserProfileReady,
-    UserTracksReady
+    UserTracksReady,
+    ElectronDownloadStarted,
+    ElectronDownloadFinished,
+    ElectronDownloadFailed
 };
 
 struct AsyncUIEvent {
@@ -97,6 +100,7 @@ private:
     void submit_load_account_profile();
     void trigger_download_all_likes();
     void cancel_download_all_likes();
+    void check_and_download_castlabs_electron(bool user_initiated = false);
 
     // Event handlers
     void process_async_events();

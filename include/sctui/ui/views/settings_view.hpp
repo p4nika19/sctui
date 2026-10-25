@@ -69,12 +69,11 @@ private:
     size_t max_cache_size_mb_{1024};
     bool lock_liked_tracks_in_cache_{true};
     bool dont_count_liked_in_general_cache_{false};
-    int volume_input_{75};
     bool discord_rpc_enabled_{true};
     bool mouse_control_{false};
     bool drm_engine_enabled_{true};
     bool download_drm_tracks_in_likes_{true};
-    bool fullscreen_visualizer_mirrored_{false};
+    core::FullscreenVisualizerStyle fullscreen_visualizer_style_{core::FullscreenVisualizerStyle::Stretched};
 
     ftxui::Component doh_input_comp_;
     ftxui::Component dns_input_comp_;

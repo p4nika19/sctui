@@ -16,19 +16,22 @@ namespace sctui::ui::views {
 enum class OnboardingStep {
     Authentication = 0,
     Appearance = 1,
-    EngineConnectivity = 2
+    EngineConnectivity = 2,
+    InstallingElectron = 3
 };
 
 class OnboardingView {
 public:
     using FinishCallback = std::function<void()>;
     using ExtractCookiesCallback = std::function<void()>;
+    using InstallElectronCallback = std::function<void(std::function<void(bool success, const std::string& err)> on_done)>;
 
     OnboardingView(
         models::AppState& state,
         core::Config& config,
         FinishCallback on_finish,
-        ExtractCookiesCallback on_extract_cookies = nullptr
+        ExtractCookiesCallback on_extract_cookies = nullptr,
+        InstallElectronCallback on_install_electron = nullptr
     );
     ~OnboardingView();
 
@@ -50,9 +53,15 @@ private:
     core::Config& config_;
     FinishCallback on_finish_;
     ExtractCookiesCallback on_extract_cookies_;
+    InstallElectronCallback on_install_electron_;
 
     OnboardingStep current_step_{OnboardingStep::Authentication};
     int selected_field_{0};
+
+    // Step 4: Installing Electron state
+    bool install_electron_failed_{false};
+    std::string install_electron_err_;
+    void start_electron_installation();
 
     // Step 1: Authentication state
     std::string auth_feedback_msg_;
@@ -76,7 +85,7 @@ private:
     bool drm_engine_enabled_{true};
     bool download_drm_tracks_in_likes_{true};
     bool discord_rpc_enabled_{true};
-    bool fullscreen_visualizer_mirrored_{false};
+    core::FullscreenVisualizerStyle fullscreen_visualizer_style_{core::FullscreenVisualizerStyle::Stretched};
     bool mouse_control_{false};
 
     ftxui::Component doh_input_comp_;
@@ -104,6 +113,7 @@ private:
     ftxui::Element render_step1_auth();
     ftxui::Element render_step2_appearance();
     ftxui::Element render_step3_engine();
+    ftxui::Element render_step4_installing_electron();
 };
 
 } // namespace sctui::ui::views

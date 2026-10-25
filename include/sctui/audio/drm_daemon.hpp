@@ -26,7 +26,7 @@ public:
     using ErrorCallback = std::function<void(const std::string& error)>;
     using SpectrumCallback = std::function<void(const std::array<float, VisualizerBandsCount>& bands)>;
 
-    explicit DrmSatelliteDaemon(std::filesystem::path satellite_dir = "satellite");
+    explicit DrmSatelliteDaemon(std::filesystem::path satellite_dir = "");
     ~DrmSatelliteDaemon();
 
     DrmSatelliteDaemon(const DrmSatelliteDaemon&) = delete;
@@ -51,6 +51,15 @@ public:
     void set_on_finished(FinishedCallback cb);
     void set_on_error(ErrorCallback cb);
     void set_on_spectrum(SpectrumCallback cb);
+
+    static constexpr const char* RequiredElectronVersion = "44.9.3+wvcus";
+    static constexpr const char* RequiredElectronTag = "v44.9.3+wvcus";
+    static constexpr const char* ElectronInstallCommand = "npm install \"https://github.com/castlabs/electron-releases#v44.9.3+wvcus\" --save";
+
+    static std::filesystem::path resolve_satellite_dir(const std::filesystem::path& user_specified = {});
+    static bool is_castlabs_electron_installed(const std::filesystem::path& satellite_dir = {});
+    static std::string get_installed_electron_version(const std::filesystem::path& satellite_dir = {});
+    static bool download_castlabs_electron(const std::filesystem::path& satellite_dir = {}, std::string* error_msg = nullptr);
 
 private:
     std::filesystem::path satellite_dir_;

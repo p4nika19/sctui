@@ -41,11 +41,17 @@ enum class IconStyle {
     DefaultAscii = 2 // Plain ASCII / Default symbols: [SC], [/], [@], <3>, [=], [~], [R], (Vol), [*]
 };
 
+enum class FullscreenVisualizerStyle {
+    Stretched = 0,        // Stretched full width (low freq on left, high freq on right)
+    LowFreqCentered = 1,  // Low frequencies centered and mirrored outward (bass in center)
+    HighFreqCentered = 2  // High frequencies centered and mirrored outward (high frequencies in center)
+};
+
 struct Config {
     std::string client_id;
     std::string auth_token;
     std::string extracted_browser; // Auto-detected browser source for auth_token
-    int volume{75}; // 0 - 150
+    int volume{100}; // 0 - 150 (defaults to 100 on first run)
     RepeatMode repeat_mode{RepeatMode::Off};
     bool shuffle{false};
     std::string cache_dir;
@@ -62,8 +68,9 @@ struct Config {
     // UI Symbols and Icons style
     IconStyle icon_style{IconStyle::Emoji};
 
-    // Fullscreen Visualizer mode (false = Stretched full width (default), true = Centered & mirrored)
-    bool fullscreen_visualizer_mirrored{false};
+    // Fullscreen Visualizer mode
+    FullscreenVisualizerStyle fullscreen_visualizer_style{FullscreenVisualizerStyle::Stretched};
+    bool fullscreen_visualizer_mirrored{false}; // Deprecated alias kept for backwards compatibility
 
     // Track caching & Liked Locking options
     size_t max_cache_size_mb{1024}; // In megabytes (0 = unlimited)

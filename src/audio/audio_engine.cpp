@@ -297,28 +297,38 @@ struct AudioEngine::Impl {
 
         if (cmd.is_drm) {
             if (!drm_daemon) {
-                drm_daemon = std::make_unique<DrmSatelliteDaemon>();
+                drm_daemon = std::make_unique<DrmSatelliteDaemon>(DrmSatelliteDaemon::resolve_satellite_dir());
                 drm_daemon->set_volume(volume_percent.load(std::memory_order_relaxed));
                 drm_daemon->set_on_state([this](PlaybackState s, uint64_t pos, uint64_t dur) {
+                    if (!is_playing_drm.load(std::memory_order_relaxed)) return;
                     state.store(s, std::memory_order_relaxed);
                     if (dur > 0) duration_ms.store(dur, std::memory_order_relaxed);
                 });
                 drm_daemon->set_on_time_update([this](uint64_t pos, uint64_t dur) {
+                    if (!is_playing_drm.load(std::memory_order_relaxed)) return;
                     position_ms.store(pos, std::memory_order_relaxed);
                     if (dur > 0) duration_ms.store(dur, std::memory_order_relaxed);
                 });
                 drm_daemon->set_on_finished([this](uint64_t id) {
+                    if (!is_playing_drm.load(std::memory_order_relaxed)) return;
                     state.store(PlaybackState::Finished, std::memory_order_relaxed);
                     if (finished_callback) {
                         finished_callback(id);
                     }
                 });
                 drm_daemon->set_on_error([this](const std::string& err) {
+                    if (!is_playing_drm.load(std::memory_order_relaxed)) return;
+                    if (err.find("interrupted by a new load request") != std::string::npos ||
+                        err.find("interrupted by a call to pause") != std::string::npos ||
+                        err.find("AbortError") != std::string::npos) {
+                        return;
+                    }
                     LOG_ERROR("AudioEngine", "DRM Daemon error: " + err);
                     state.store(PlaybackState::Error, std::memory_order_relaxed);
                 });
                 drm_daemon->set_on_spectrum([this](const std::array<float, VisualizerBandsCount>& bands) {
-                    if (state.load(std::memory_order_relaxed) != PlaybackState::Playing) {
+                    if (!is_playing_drm.load(std::memory_order_relaxed) ||
+                        state.load(std::memory_order_relaxed) != PlaybackState::Playing) {
                         return;
                     }
                     float vol = volume_percent.load(std::memory_order_relaxed);

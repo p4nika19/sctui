@@ -16,6 +16,7 @@
 #include "sctui/core/track_cache.hpp"
 #include "sctui/ui/theme_symbols.hpp"
 #include "sctui/discord/discord_rpc.hpp"
+#include "sctui/audio/drm_daemon.hpp"
 #include "sctui/ui/views/settings_view.hpp"
 #include "sctui/ui/views/onboarding_view.hpp"
 #include "sctui/ui/views/track_list_view.hpp"
@@ -472,6 +473,114 @@ void test_drm_and_goplus_separation() {
     REQUIRE(prev_playable->id == 2001);
     REQUIRE(prev_playable->title == "Playable Track 1");
     std::cout << "  -> Backward Queue skipping successfully bypassed 2 DRM tracks and returned to Playable Track 1" << std::endl;
+
+    // 4. Test UserProfile subscription check & Go+ queue skipping
+    sctui::models::AppState app_state;
+    REQUIRE(!app_state.user_has_go());
+    REQUIRE(!app_state.user_has_go_plus());
+
+    sctui::models::UserProfile profile_free;
+    profile_free.subscription_tier = sctui::models::SubscriptionTier::Free;
+    REQUIRE(!profile_free.has_go());
+    REQUIRE(!profile_free.has_go_plus());
+
+    sctui::models::UserProfile profile_go;
+    profile_go.subscription_tier = sctui::models::SubscriptionTier::Go;
+    REQUIRE(profile_go.has_go());
+    REQUIRE(!profile_go.has_go_plus());
+
+    sctui::models::UserProfile profile_goplus;
+    profile_goplus.subscription_tier = sctui::models::SubscriptionTier::GoPlus;
+    REQUIRE(profile_goplus.has_go());
+    REQUIRE(profile_goplus.has_go_plus());
+
+    // Queue containing playable, Go+, and playable
+    sctui::models::Track goplus_song;
+    goplus_song.id = 3002;
+    goplus_song.title = "Go+ Song";
+    goplus_song.access_type = sctui::models::TrackAccessType::GoPlus;
+    goplus_song.is_snipped = true;
+
+    sctui::models::QueueState q_sub;
+    q_sub.tracks = { playable1, goplus_song, playable2 };
+    q_sub.current_index = 0;
+
+    // Advance next with Free account -> Go+ track skipped
+    size_t goplus_skipped = 0;
+    std::optional<sctui::models::Track> sub_candidate;
+    for (size_t i = 0; i < q_sub.tracks.size(); ++i) {
+        q_sub.advance_next();
+        auto cand = q_sub.current_track();
+        if (!cand) break;
+        if ((cand->is_go_plus() || cand->is_snipped) && !app_state.user_has_go_plus()) {
+            goplus_skipped++;
+            continue;
+        }
+        sub_candidate = cand;
+        break;
+    }
+    REQUIRE(goplus_skipped == 1);
+    REQUIRE(sub_candidate.has_value());
+    REQUIRE(sub_candidate->id == 2004);
+    std::cout << "  -> Free account auto-skipped Go+ track to Playable Track 2 OK" << std::endl;
+
+    // Advance next with Go+ account -> Go+ track NOT skipped
+    app_state.user_profile = profile_goplus;
+    REQUIRE(app_state.user_has_go_plus());
+    q_sub.current_index = 0;
+    goplus_skipped = 0;
+    sub_candidate.reset();
+    for (size_t i = 0; i < q_sub.tracks.size(); ++i) {
+        q_sub.advance_next();
+        auto cand = q_sub.current_track();
+        if (!cand) break;
+        if ((cand->is_go_plus() || cand->is_snipped) && !app_state.user_has_go_plus()) {
+            goplus_skipped++;
+            continue;
+        }
+        sub_candidate = cand;
+        break;
+    }
+    REQUIRE(goplus_skipped == 0);
+    REQUIRE(sub_candidate.has_value());
+    REQUIRE(sub_candidate->id == 3002);
+    std::cout << "  -> Go+ account allowed Go+ playback without skipping OK" << std::endl;
+}
+
+void test_castlabs_electron_presence_and_download() {
+    std::cout << "[Test] Running Castlabs Electron Presence Detection & Auto-Download verification..." << std::endl;
+
+    auto sat_dir = sctui::audio::DrmSatelliteDaemon::resolve_satellite_dir();
+    REQUIRE(!sat_dir.empty());
+    REQUIRE(std::filesystem::exists(sat_dir / "main.js"));
+
+    // 1. Verify detection of installed Castlabs Electron version
+    bool is_installed = sctui::audio::DrmSatelliteDaemon::is_castlabs_electron_installed(sat_dir);
+    REQUIRE(is_installed == true);
+
+    std::string ver = sctui::audio::DrmSatelliteDaemon::get_installed_electron_version(sat_dir);
+    REQUIRE(!ver.empty());
+    REQUIRE(ver.find("44.9.3") != std::string::npos || ver.find("wvcus") != std::string::npos);
+    std::cout << "  -> Detected installed Castlabs Electron version: " << ver << " in " << sat_dir.string() << std::endl;
+
+    // 2. Verify command strings match the exact device install command from history
+    REQUIRE(std::string(sctui::audio::DrmSatelliteDaemon::ElectronInstallCommand) ==
+            "npm install \"https://github.com/castlabs/electron-releases#v44.9.3+wvcus\" --save");
+    REQUIRE(std::string(sctui::audio::DrmSatelliteDaemon::RequiredElectronVersion) == "44.9.3+wvcus");
+    REQUIRE(std::string(sctui::audio::DrmSatelliteDaemon::RequiredElectronTag) == "v44.9.3+wvcus");
+
+    // 3. Verify false detection for non-existent / empty directory
+    auto fake_dir = std::filesystem::temp_directory_path() / "sctui_fake_satellite_nonexistent";
+    std::filesystem::remove_all(fake_dir);
+    REQUIRE(sctui::audio::DrmSatelliteDaemon::is_castlabs_electron_installed(fake_dir) == false);
+
+    // 4. Verify AppState has is_downloading_electron flag initialized to false
+    sctui::models::AppState state;
+    REQUIRE(state.is_downloading_electron == false);
+    state.is_downloading_electron = true;
+    REQUIRE(state.is_downloading_electron == true);
+
+    std::cout << "  -> Castlabs Electron presence detection & download command verification OK" << std::endl;
 }
 
 void test_cookie_extractor() {
@@ -1145,11 +1254,12 @@ void test_settings_and_mouse_coordinate_mapping() {
     REQUIRE(!settings.is_field_visible(7)); // Custom DNS endpoint hidden
     REQUIRE(settings.is_field_visible(8)); // Proxy URL visible
 
-    // Test selection and toggle of Field 4 (Fullscreen Visualizer Mirrored)
+    // Test selection and toggle of Field 4 (Fullscreen Visualizer Style)
     settings.select_field(4);
-    REQUIRE(config.fullscreen_visualizer_mirrored == false);
-    settings.get_component()->OnEvent(ftxui::Event::Character(' ')); // toggle
-    settings.get_component()->OnEvent(ftxui::Event::Character(' ')); // toggle back
+    REQUIRE(config.fullscreen_visualizer_style == sctui::core::FullscreenVisualizerStyle::Stretched);
+    settings.get_component()->OnEvent(ftxui::Event::Character(' ')); // Cycle to LowFreqCentered
+    settings.get_component()->OnEvent(ftxui::Event::Character(' ')); // Cycle to HighFreqCentered
+    settings.get_component()->OnEvent(ftxui::Event::Character(' ')); // Cycle to Stretched
 
     // Test Down arrow navigation from Field 5 (DNS Mode) skips invisible fields 6 & 7 straight to 8
     settings.select_field(5);
@@ -1665,6 +1775,137 @@ void test_recent_improvements() {
     }
 }
 
+void test_in_tab_search_and_fullscreen_shuf_bold() {
+    std::cout << "[Test] Running Likes & Playlists In-Tab Search and Fullscreen Shuf Bold verification..." << std::endl;
+
+    // 1. In-tab search in Likes
+    {
+        sctui::models::AppState state;
+        state.terminal_width = 120;
+        state.terminal_height = 40;
+        state.current_view = sctui::models::ViewMode::Likes;
+        state.focused_panel = sctui::models::FocusPanel::TrackList;
+
+        sctui::models::Track t1;
+        t1.id = 1; t1.title = "Strobe"; t1.artist = "Deadmau5";
+        sctui::models::Track t2;
+        t2.id = 2; t2.title = "Ghosts 'n' Stuff"; t2.artist = "Deadmau5";
+        sctui::models::Track t3;
+        t3.id = 3; t3.title = "Alone"; t3.artist = "Marshmello";
+
+        state.likes_tracks = {t1, t2, t3};
+
+        sctui::ui::views::TrackListView tlv(state, nullptr, nullptr, nullptr, nullptr);
+
+        // Before search: render has subtle prompt
+        auto elem_idle = tlv.render(true);
+        auto screen_idle = ftxui::Screen::Create(ftxui::Dimension::Fixed(120), ftxui::Dimension::Fixed(30));
+        ftxui::Render(screen_idle, elem_idle);
+        std::string out_idle = screen_idle.ToString();
+        REQUIRE(out_idle.find("alt+/ to search in likes") != std::string::npos);
+        REQUIRE(tlv.get_current_track_list().size() == 3);
+
+        // Trigger Alt+/ via event
+        tlv.get_component()->OnEvent(ftxui::Event::Special("\x1b/"));
+        REQUIRE(tlv.is_searching());
+
+        // Type "ghost" into search box
+        for (char c : std::string("ghost")) {
+            tlv.get_component()->OnEvent(ftxui::Event::Character(c));
+        }
+
+        // Live filtering check
+        const auto& filtered = tlv.get_current_track_list();
+        REQUIRE(filtered.size() == 1);
+        REQUIRE(filtered[0].title == "Ghosts 'n' Stuff");
+
+        // Render while searching has input box
+        auto elem_searching = tlv.render(true);
+        auto screen_searching = ftxui::Screen::Create(ftxui::Dimension::Fixed(120), ftxui::Dimension::Fixed(30));
+        ftxui::Render(screen_searching, elem_searching);
+        std::string out_searching = screen_searching.ToString();
+        REQUIRE(out_searching.find("ghost") != std::string::npos);
+        REQUIRE(out_searching.find("Ghosts 'n' Stuff") != std::string::npos);
+        REQUIRE(out_searching.find("Strobe") == std::string::npos);
+
+        // Escape closes search and restores full list
+        tlv.get_component()->OnEvent(ftxui::Event::Escape);
+        REQUIRE(!tlv.is_searching());
+        REQUIRE(tlv.get_current_track_list().size() == 3);
+        std::cout << "  -> Likes in-tab Alt+/ search & live filtering verified OK" << std::endl;
+    }
+
+    // 2. In-tab search in Playlists
+    {
+        sctui::models::AppState state;
+        state.terminal_width = 120;
+        state.terminal_height = 40;
+        state.current_view = sctui::models::ViewMode::Playlists;
+        state.focused_panel = sctui::models::FocusPanel::TrackList;
+
+        sctui::models::Playlist p1;
+        p1.id = 101; p1.title = "Chill Beats"; p1.track_count = 10;
+        sctui::models::Playlist p2;
+        p2.id = 102; p2.title = "Gym Workout"; p2.track_count = 25;
+        sctui::models::Playlist p3;
+        p3.id = 103; p3.title = "Chillhop Essentials"; p3.track_count = 50;
+
+        state.playlists = {p1, p2, p3};
+
+        sctui::ui::views::TrackListView tlv(state, nullptr, nullptr, nullptr, nullptr);
+
+        // Before search: subtle inscribe for playlists
+        auto elem_idle = tlv.render(true);
+        auto screen_idle = ftxui::Screen::Create(ftxui::Dimension::Fixed(120), ftxui::Dimension::Fixed(30));
+        ftxui::Render(screen_idle, elem_idle);
+        std::string out_idle = screen_idle.ToString();
+        REQUIRE(out_idle.find("alt+/ to search in playlists") != std::string::npos);
+        REQUIRE(tlv.get_current_playlist_list().size() == 3);
+
+        // Toggle search
+        tlv.toggle_search();
+        REQUIRE(tlv.is_searching());
+
+        // Type "chill"
+        for (char c : std::string("chill")) {
+            tlv.get_component()->OnEvent(ftxui::Event::Character(c));
+        }
+
+        const auto& filtered_pls = tlv.get_current_playlist_list();
+        REQUIRE(filtered_pls.size() == 2);
+        REQUIRE(filtered_pls[0].title == "Chill Beats");
+        REQUIRE(filtered_pls[1].title == "Chillhop Essentials");
+
+        // Close search
+        tlv.close_search();
+        REQUIRE(!tlv.is_searching());
+        REQUIRE(tlv.get_current_playlist_list().size() == 3);
+        std::cout << "  -> Playlists in-tab Alt+/ search & live filtering verified OK" << std::endl;
+    }
+
+    // 3. Fullscreen visualizer styles: LowFreqCentered and HighFreqCentered
+    {
+        int w = 101;
+        float mid = (w - 1) / 2.0f;
+
+        // At center (x = 50):
+        float dist_center_mid = std::abs(50.0f - mid) / mid;
+        float norm_low_mid = std::clamp(dist_center_mid, 0.0f, 1.0f);
+        float norm_high_mid = 1.0f - std::clamp(dist_center_mid, 0.0f, 1.0f);
+        REQUIRE(norm_low_mid == 0.0f);
+        REQUIRE(norm_high_mid == 1.0f);
+
+        // At edge (x = 0):
+        float dist_center_edge = std::abs(0.0f - mid) / mid;
+        float norm_low_edge = std::clamp(dist_center_edge, 0.0f, 1.0f);
+        float norm_high_edge = 1.0f - std::clamp(dist_center_edge, 0.0f, 1.0f);
+        REQUIRE(norm_low_edge == 1.0f);
+        REQUIRE(norm_high_edge == 0.0f);
+
+        std::cout << "  -> Fullscreen visualizer LowFreqCentered and HighFreqCentered symmetry OK" << std::endl;
+    }
+}
+
 int main() {
     std::cout << "=== Running sctui test suite ===" << std::endl;
     test_spsc_queue();
@@ -1682,6 +1923,7 @@ int main() {
     test_settings_and_mouse_coordinate_mapping();
     test_cover_art_processor();
     test_drm_and_goplus_separation();
+    test_castlabs_electron_presence_and_download();
     test_mpris_server();
     test_discord_rpc_integration();
     test_cookie_extractor();
@@ -1696,6 +1938,7 @@ int main() {
     test_account_profile();
     test_like_indicator_and_toggle_unlike();
     test_recent_improvements();
+    test_in_tab_search_and_fullscreen_shuf_bold();
     std::cout << "=== All tests PASSED successfully! ===" << std::endl;
     return 0;
 }

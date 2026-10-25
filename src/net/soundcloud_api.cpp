@@ -341,6 +341,32 @@ core::Result<models::UserProfile> SoundCloudApi::get_me() {
         if (j.contains("plan") && j["plan"].is_string()) {
             profile.plan = j["plan"].get<std::string>();
         }
+        if (j.contains("consumer_subscription") && j["consumer_subscription"].is_object()) {
+            const auto& cs = j["consumer_subscription"];
+            if (cs.contains("product") && cs["product"].is_object()) {
+                std::string pid = cs["product"].value("id", "free");
+                profile.consumer_subscription_id = pid;
+                std::string lower_pid = pid;
+                std::transform(lower_pid.begin(), lower_pid.end(), lower_pid.begin(), ::tolower);
+                if (lower_pid.find("high") != std::string::npos || lower_pid.find("go-plus") != std::string::npos ||
+                    lower_pid.find("go_plus") != std::string::npos || lower_pid.find("goplus") != std::string::npos) {
+                    profile.subscription_tier = models::SubscriptionTier::GoPlus;
+                } else if (lower_pid.find("mid") != std::string::npos || lower_pid.find("go") != std::string::npos) {
+                    if (lower_pid != "free") {
+                        profile.subscription_tier = models::SubscriptionTier::Go;
+                    }
+                }
+            }
+        }
+        if (profile.subscription_tier == models::SubscriptionTier::Free && !profile.plan.empty()) {
+            std::string lower_plan = profile.plan;
+            std::transform(lower_plan.begin(), lower_plan.end(), lower_plan.begin(), ::tolower);
+            if (lower_plan.find("go+") != std::string::npos || lower_plan.find("go plus") != std::string::npos || lower_plan.find("goplus") != std::string::npos) {
+                profile.subscription_tier = models::SubscriptionTier::GoPlus;
+            } else if (lower_plan.find("go") != std::string::npos) {
+                profile.subscription_tier = models::SubscriptionTier::Go;
+            }
+        }
         if (j.contains("first_name") && j["first_name"].is_string()) {
             profile.first_name = j["first_name"].get<std::string>();
         }

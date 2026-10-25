@@ -23,6 +23,12 @@ struct CoverArtImage {
     std::vector<uint8_t> raw_image_bytes;
 };
 
+enum class SubscriptionTier {
+    Free = 0,
+    Go,
+    GoPlus
+};
+
 struct UserProfile {
     uint64_t id{0};
     std::string username;
@@ -33,6 +39,8 @@ struct UserProfile {
     std::string country;
     std::string city;
     std::string plan;
+    std::string consumer_subscription_id{"free"};
+    SubscriptionTier subscription_tier{SubscriptionTier::Free};
     std::string first_name;
     std::string last_name;
     std::string full_name;
@@ -48,6 +56,14 @@ struct UserProfile {
     uint64_t reposts_count{0};
 
     std::optional<CoverArtImage> avatar_image;
+
+    [[nodiscard]] bool has_go() const noexcept {
+        return subscription_tier == SubscriptionTier::Go || subscription_tier == SubscriptionTier::GoPlus;
+    }
+
+    [[nodiscard]] bool has_go_plus() const noexcept {
+        return subscription_tier == SubscriptionTier::GoPlus;
+    }
 };
 
 } // namespace sctui::models

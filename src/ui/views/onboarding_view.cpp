@@ -5,6 +5,7 @@
 #include <algorithm>
 #include "sctui/core/cookie_extractor.hpp"
 #include "sctui/ui/theme_symbols.hpp"
+#include "sctui/audio/drm_daemon.hpp"
 
 namespace sctui::ui::views {
 
@@ -24,11 +25,13 @@ OnboardingView::OnboardingView(
     models::AppState& state,
     core::Config& config,
     FinishCallback on_finish,
-    ExtractCookiesCallback on_extract_cookies
+    ExtractCookiesCallback on_extract_cookies,
+    InstallElectronCallback on_install_electron
 ) : state_(state),
     config_(config),
     on_finish_(std::move(on_finish)),
-    on_extract_cookies_(std::move(on_extract_cookies)) {
+    on_extract_cookies_(std::move(on_extract_cookies)),
+    on_install_electron_(std::move(on_install_electron)) {
 
     // Initialize draft values from config
     icon_style_idx_ = static_cast<int>(config_.icon_style);
@@ -44,7 +47,7 @@ OnboardingView::OnboardingView(
     drm_engine_enabled_ = config_.drm_engine_enabled;
     download_drm_tracks_in_likes_ = config_.download_drm_tracks_in_likes;
     discord_rpc_enabled_ = config_.discord_rpc_enabled;
-    fullscreen_visualizer_mirrored_ = config_.fullscreen_visualizer_mirrored;
+    fullscreen_visualizer_style_ = config_.fullscreen_visualizer_style;
     mouse_control_ = config_.mouse_control;
 
     // Load static UI fixture cover art
@@ -309,7 +312,7 @@ OnboardingView::OnboardingView(
                     return true;
                 }
                 if (selected_field_ == 7) { // Fullscreen Visualizer
-                    fullscreen_visualizer_mirrored_ = !fullscreen_visualizer_mirrored_;
+                    fullscreen_visualizer_style_ = static_cast<core::FullscreenVisualizerStyle>((static_cast<int>(fullscreen_visualizer_style_) + 2) % 3);
                     return true;
                 }
                 if (selected_field_ == 8) { // Mouse Controls
@@ -343,7 +346,7 @@ OnboardingView::OnboardingView(
                     return true;
                 }
                 if (selected_field_ == 7) { // Fullscreen Visualizer
-                    fullscreen_visualizer_mirrored_ = !fullscreen_visualizer_mirrored_;
+                    fullscreen_visualizer_style_ = static_cast<core::FullscreenVisualizerStyle>((static_cast<int>(fullscreen_visualizer_style_) + 2) % 3);
                     return true;
                 }
                 if (selected_field_ == 8) { // Mouse Controls
@@ -378,7 +381,7 @@ OnboardingView::OnboardingView(
                     return true;
                 }
                 if (selected_field_ == 7) {
-                    fullscreen_visualizer_mirrored_ = !fullscreen_visualizer_mirrored_;
+                    fullscreen_visualizer_style_ = static_cast<core::FullscreenVisualizerStyle>((static_cast<int>(fullscreen_visualizer_style_) + 1) % 3);
                     return true;
                 }
                 if (selected_field_ == 8) {
@@ -393,6 +396,11 @@ OnboardingView::OnboardingView(
                 if (selected_field_ == 10) {
                     // Confirm & Start -> Apply and finish!
                     sync_to_config();
+                    if (drm_engine_enabled_ && !audio::DrmSatelliteDaemon::is_castlabs_electron_installed() && on_install_electron_) {
+                        set_step(OnboardingStep::InstallingElectron);
+                        start_electron_installation();
+                        return true;
+                    }
                     config_.onboarding_completed = true;
                     (void)config_.save();
                     core::CoverArtProcessor::clear_terminal_image(888);
@@ -405,6 +413,39 @@ OnboardingView::OnboardingView(
                 }
             }
             return false;
+        }
+
+        if (current_step_ == OnboardingStep::InstallingElectron) {
+            if (install_electron_failed_) {
+                if (event == Event::ArrowLeft || event == Event::Character('h')) {
+                    selected_field_ = 0;
+                    return true;
+                }
+                if (event == Event::ArrowRight || event == Event::Character('l') || event == Event::Tab) {
+                    selected_field_ = (selected_field_ + 1) % 2;
+                    return true;
+                }
+                if (event == Event::Return || event == Event::Character(' ')) {
+                    if (selected_field_ == 0) {
+                        start_electron_installation();
+                        return true;
+                    } else if (selected_field_ == 1) {
+                        drm_engine_enabled_ = false;
+                        config_.drm_engine_enabled = false;
+                        state_.drm_engine_enabled = false;
+                        config_.onboarding_completed = true;
+                        (void)config_.save();
+                        core::CoverArtProcessor::clear_terminal_image(888);
+                        core::CoverArtProcessor::clear_terminal_image(0);
+                        preview_drawn_in_terminal_ = false;
+                        if (on_finish_) {
+                            on_finish_();
+                        }
+                        return true;
+                    }
+                }
+            }
+            return true;
         }
 
         return false;
@@ -451,13 +492,40 @@ void OnboardingView::sync_to_config() {
     config_.drm_engine_enabled = drm_engine_enabled_;
     config_.download_drm_tracks_in_likes = download_drm_tracks_in_likes_;
     config_.discord_rpc_enabled = discord_rpc_enabled_;
-    config_.fullscreen_visualizer_mirrored = fullscreen_visualizer_mirrored_;
+    config_.fullscreen_visualizer_style = fullscreen_visualizer_style_;
+    config_.fullscreen_visualizer_mirrored = (fullscreen_visualizer_style_ != core::FullscreenVisualizerStyle::Stretched);
     config_.mouse_control = mouse_control_;
 
     state_.icon_style = config_.icon_style;
     state_.drm_engine_enabled = drm_engine_enabled_;
     state_.download_drm_tracks_in_likes = download_drm_tracks_in_likes_;
     state_.mouse_control = mouse_control_;
+}
+
+void OnboardingView::start_electron_installation() {
+    install_electron_failed_ = false;
+    install_electron_err_.clear();
+    state_.is_downloading_electron = true;
+
+    if (on_install_electron_) {
+        on_install_electron_([this](bool ok, const std::string& err) {
+            state_.is_downloading_electron = false;
+            if (ok) {
+                config_.onboarding_completed = true;
+                (void)config_.save();
+                core::CoverArtProcessor::clear_terminal_image(888);
+                core::CoverArtProcessor::clear_terminal_image(0);
+                preview_drawn_in_terminal_ = false;
+                if (on_finish_) {
+                    on_finish_();
+                }
+            } else {
+                install_electron_failed_ = true;
+                install_electron_err_ = err;
+                selected_field_ = 0;
+            }
+        });
+    }
 }
 
 bool OnboardingView::is_step3_field_visible(int idx) const {
@@ -530,7 +598,7 @@ Element OnboardingView::render_persistent_header() {
     header_elems.push_back(text(""));
 
     // Multi-step persistent step indicator bar
-    Element step1_badge, step2_badge, step3_badge;
+    Element step1_badge, step2_badge, step3_badge, step4_badge;
     if (current_step_ == OnboardingStep::Authentication) {
         step1_badge = text(" 1. AUTHENTICATION ") | bgcolor(accent) | color(Color::Black) | bold;
         step2_badge = text(" 2. APPEARANCE ") | color(Color::GrayLight);
@@ -539,21 +607,32 @@ Element OnboardingView::render_persistent_header() {
         step1_badge = text(" ✓ 1. AUTHENTICATION ") | color(Color::GreenLight) | bold;
         step2_badge = text(" 2. APPEARANCE ") | bgcolor(accent) | color(Color::Black) | bold;
         step3_badge = text(" 3. ENGINE & CONNECTIVITY ") | color(Color::GrayLight);
-    } else {
+    } else if (current_step_ == OnboardingStep::EngineConnectivity) {
         step1_badge = text(" ✓ 1. AUTHENTICATION ") | color(Color::GreenLight) | bold;
         step2_badge = text(" ✓ 2. APPEARANCE ") | color(Color::GreenLight) | bold;
         step3_badge = text(" 3. ENGINE & CONNECTIVITY ") | bgcolor(accent) | color(Color::Black) | bold;
+    } else {
+        step1_badge = text(" ✓ 1. AUTHENTICATION ") | color(Color::GreenLight) | bold;
+        step2_badge = text(" ✓ 2. APPEARANCE ") | color(Color::GreenLight) | bold;
+        step3_badge = text(" ✓ 3. ENGINE & CONNECTIVITY ") | color(Color::GreenLight) | bold;
+        step4_badge = text(" 4. INSTALLING ELECTRON ") | bgcolor(accent) | color(Color::Black) | bold;
     }
 
-    header_elems.push_back(hbox({
+    Elements step_bar = {
         filler(),
         step1_badge,
         text(" ─── ") | color(Color::GrayDark),
         step2_badge,
         text(" ─── ") | color(Color::GrayDark),
-        step3_badge,
-        filler()
-    }));
+        step3_badge
+    };
+    if (current_step_ == OnboardingStep::InstallingElectron) {
+        step_bar.push_back(text(" ─── ") | color(Color::GrayDark));
+        step_bar.push_back(step4_badge);
+    }
+    step_bar.push_back(filler());
+
+    header_elems.push_back(hbox(std::move(step_bar)));
     header_elems.push_back(text(""));
     header_elems.push_back(separator() | color(Color::RGB(50, 50, 60)));
 
@@ -928,8 +1007,25 @@ Element OnboardingView::render_step3_engine() {
     body.push_back(text(""));
 
     // --- Card 2: Audio Engine & Integrations ---
-    auto drm_elem = text(drm_engine_enabled_ ? "< Enabled (CastLabs Daemon) >" : "< Disabled >")
-        | (selected_field_ == 4 ? color(accent) | bold : color(drm_engine_enabled_ ? Color::GreenLight : Color::GrayLight));
+    bool electron_installed = audio::DrmSatelliteDaemon::is_castlabs_electron_installed();
+    std::string drm_status_str;
+    ftxui::Color drm_status_color = Color::GrayLight;
+    if (!drm_engine_enabled_) {
+        drm_status_str = "< Disabled >";
+        drm_status_color = Color::GrayLight;
+    } else if (state_.is_downloading_electron) {
+        drm_status_str = "< Downloading Electron... >";
+        drm_status_color = Color::YellowLight;
+    } else if (electron_installed) {
+        drm_status_str = "< Enabled (CastLabs Daemon) >";
+        drm_status_color = Color::GreenLight;
+    } else {
+        drm_status_str = "< Enabled (CastLabs Daemon) >";
+        drm_status_color = Color::GreenLight;
+    }
+
+    auto drm_elem = text(drm_status_str)
+        | (selected_field_ == 4 ? color(accent) | bold : color(drm_status_color));
 
     auto drm_likes_elem = text(download_drm_tracks_in_likes_ ? "< Enabled (Non-GO tracks) >" : "< Disabled >")
         | (selected_field_ == 5 ? color(accent) | bold : color(download_drm_tracks_in_likes_ ? Color::GreenLight : Color::GrayLight));
@@ -937,8 +1033,20 @@ Element OnboardingView::render_step3_engine() {
     auto discord_elem = text(discord_rpc_enabled_ ? "< Enabled >" : "< Disabled >")
         | (selected_field_ == 6 ? color(accent) | bold : color(discord_rpc_enabled_ ? Color::GreenLight : Color::GrayLight));
 
-    auto vis_elem = text(fullscreen_visualizer_mirrored_ ? "< Centered & Mirrored >" : "< Stretched (Full Width) >")
-        | (selected_field_ == 7 ? color(accent) | bold : color(fullscreen_visualizer_mirrored_ ? Color::CyanLight : Color::White));
+    std::string vis_str;
+    switch (fullscreen_visualizer_style_) {
+        case core::FullscreenVisualizerStyle::Stretched:
+            vis_str = "< Stretched (Full Width) >";
+            break;
+        case core::FullscreenVisualizerStyle::LowFreqCentered:
+            vis_str = "< Low Freq Centered & Mirrored >";
+            break;
+        case core::FullscreenVisualizerStyle::HighFreqCentered:
+            vis_str = "< High Freq Centered & Mirrored >";
+            break;
+    }
+    auto vis_elem = text(vis_str)
+        | (selected_field_ == 7 ? color(accent) | bold : color(fullscreen_visualizer_style_ != core::FullscreenVisualizerStyle::Stretched ? Color::CyanLight : Color::White));
 
     auto mouse_elem = text(mouse_control_ ? "< Enabled >" : "< Disabled >")
         | (selected_field_ == 8 ? color(accent) | bold : color(mouse_control_ ? Color::GreenLight : Color::GrayLight));
@@ -1000,6 +1108,58 @@ Element OnboardingView::render_step3_engine() {
     return vbox(std::move(body));
 }
 
+Element OnboardingView::render_step4_installing_electron() {
+    auto accent = state_.get_accent_color();
+    clickable_zones_.clear();
+
+    Elements body;
+    body.push_back(text(""));
+    body.push_back(text("Setting Up Widevine DRM Playback Engine") | color(Color::White) | bold | center);
+    body.push_back(text("Installing Castlabs Electron before launching SCTUI...") | color(Color::GrayLight) | center);
+    body.push_back(text(""));
+
+    Elements card_content;
+    card_content.push_back(hbox({
+        text(" ⚡ CASTLABS ELECTRON SETUP ") | color(accent) | bold,
+        filler()
+    }));
+    card_content.push_back(text(""));
+
+    if (!install_electron_failed_) {
+        card_content.push_back(text(" ⏳ Downloading Castlabs Electron (v44.9.3+wvcus)...") | color(Color::YellowLight) | bold);
+        card_content.push_back(text("    Command: " + std::string(audio::DrmSatelliteDaemon::ElectronInstallCommand)) | color(Color::GrayDark));
+        card_content.push_back(text(""));
+        card_content.push_back(text("    Please wait while Widevine CDM and VMP binaries are configured.") | color(Color::GrayLight));
+        card_content.push_back(text("    SCTUI will automatically start once download completes.") | color(Color::GreenLight) | bold);
+    } else {
+        card_content.push_back(text(" ✖ Failed to download Castlabs Electron:") | color(Color::RedLight) | bold);
+        card_content.push_back(text("    " + install_electron_err_) | color(Color::RedLight));
+        card_content.push_back(text(""));
+
+        auto btn_retry = text(" [ 🔄 Retry Installation ] ")
+            | (selected_field_ == 0 ? bgcolor(accent) | color(Color::Black) | bold : bgcolor(Color::RGB(40, 40, 50)) | color(Color::White) | bold);
+        auto btn_continue = text(" [ ⏭ Continue Without DRM ] ")
+            | (selected_field_ == 1 ? bgcolor(accent) | color(Color::Black) | bold : bgcolor(Color::RGB(40, 40, 50)) | color(Color::White) | bold);
+
+        card_content.push_back(hbox({
+            filler(),
+            btn_retry,
+            text("   "),
+            btn_continue,
+            filler()
+        }));
+    }
+
+    auto install_card = vbox(std::move(card_content))
+        | borderRounded
+        | color(!install_electron_failed_ ? accent : Color::RedLight)
+        | bgcolor(Color::RGB(16, 16, 22))
+        | size(WIDTH, LESS_THAN, 82);
+
+    body.push_back(hbox({ filler(), install_card, filler() }));
+    return vbox(std::move(body));
+}
+
 Element OnboardingView::render() {
     Elements layout;
 
@@ -1020,8 +1180,10 @@ Element OnboardingView::render() {
         layout.push_back(render_step1_auth());
     } else if (current_step_ == OnboardingStep::Appearance) {
         layout.push_back(render_step2_appearance());
-    } else {
+    } else if (current_step_ == OnboardingStep::EngineConnectivity) {
         layout.push_back(render_step3_engine());
+    } else {
+        layout.push_back(render_step4_installing_electron());
     }
 
     layout.push_back(filler());

@@ -7,18 +7,24 @@
 #include <sys/wait.h>
 #include <sys/prctl.h>
 #include <iostream>
+#include <fstream>
+#include <sstream>
 #include <array>
 #include <algorithm>
 
 namespace sctui::audio {
 
-namespace {
-
-std::filesystem::path resolve_satellite_dir(const std::filesystem::path& user_specified) {
-    if (!user_specified.empty() && std::filesystem::exists(user_specified / "main.js")) {
+std::filesystem::path DrmSatelliteDaemon::resolve_satellite_dir(const std::filesystem::path& user_specified) {
+    if (!user_specified.empty() && user_specified != "satellite") {
         std::error_code ec;
-        auto canon = std::filesystem::canonical(user_specified, ec);
-        return ec ? user_specified : canon;
+        if (std::filesystem::exists(user_specified / "main.js", ec)) {
+            auto canon = std::filesystem::canonical(user_specified, ec);
+            return ec ? user_specified : canon;
+        }
+        // If an explicit absolute path was given (e.g. in unit tests), preserve it
+        if (user_specified.is_absolute()) {
+            return user_specified;
+        }
     }
 
     std::vector<std::filesystem::path> candidates;
@@ -33,20 +39,39 @@ std::filesystem::path resolve_satellite_dir(const std::filesystem::path& user_sp
         auto dir = exe_path.parent_path();
         candidates.push_back(dir / "satellite");
         candidates.push_back(dir / ".." / "satellite");
+        candidates.push_back(dir / ".." / "share" / "sctui" / "satellite");
         candidates.push_back(dir / ".." / ".." / "satellite");
+        candidates.push_back(dir / ".." / ".." / "share" / "sctui" / "satellite");
         candidates.push_back(dir / ".." / ".." / ".." / "satellite");
         candidates.push_back(dir / ".." / ".." / ".." / ".." / "satellite");
     }
 
-    // Check user config directory: ~/.config/soundcloud-tui/satellite
+    // Check user config directory: ~/.config/soundcloud-tui/satellite or ~/.config/sctui/satellite
     const char* home = std::getenv("HOME");
     if (home && *home) {
+        candidates.push_back(std::filesystem::path(home) / ".local" / "share" / "sctui" / "satellite");
         candidates.push_back(std::filesystem::path(home) / ".config" / "soundcloud-tui" / "satellite");
+        candidates.push_back(std::filesystem::path(home) / ".config" / "sctui" / "satellite");
     }
+
+    // Check system-wide shared directories
+    candidates.push_back("/usr/local/share/sctui/satellite");
+    candidates.push_back("/usr/share/sctui/satellite");
 
     // Check well-known repo dir
     candidates.push_back("/home/p4nika/projects/cpp/sctui/satellite");
 
+    // 1. Highest priority: candidate directory with main.js AND installed electron binary
+    for (const auto& candidate : candidates) {
+        std::error_code err;
+        if (std::filesystem::exists(candidate / "main.js", err) &&
+            std::filesystem::exists(candidate / "node_modules" / "electron" / "dist" / "electron", err)) {
+            auto canon = std::filesystem::canonical(candidate, err);
+            return err ? candidate : canon;
+        }
+    }
+
+    // 2. Second priority: candidate with main.js
     for (const auto& candidate : candidates) {
         std::error_code err;
         if (std::filesystem::exists(candidate / "main.js", err)) {
@@ -55,10 +80,185 @@ std::filesystem::path resolve_satellite_dir(const std::filesystem::path& user_sp
         }
     }
 
-    return user_specified.empty() ? std::filesystem::path("satellite") : user_specified;
+    // 3. Third priority: candidate directory that exists
+    for (const auto& candidate : candidates) {
+        std::error_code err;
+        if (std::filesystem::exists(candidate, err)) {
+            return candidate;
+        }
+    }
+
+    if (!user_specified.empty() && user_specified != "satellite") {
+        return user_specified;
+    }
+    return "/home/p4nika/projects/cpp/sctui/satellite";
 }
 
-} // namespace
+std::string DrmSatelliteDaemon::get_installed_electron_version(const std::filesystem::path& satellite_dir) {
+    auto sat_dir = resolve_satellite_dir(satellite_dir);
+    std::error_code ec;
+
+    // 1. Check dist/version
+    std::filesystem::path dist_dir = sat_dir / "node_modules" / "electron" / "dist";
+    std::filesystem::path electron_bin = dist_dir / "electron";
+    std::filesystem::path version_file = dist_dir / "version";
+    if (std::filesystem::exists(electron_bin, ec) && std::filesystem::exists(version_file, ec)) {
+        std::ifstream vf(version_file);
+        if (vf.is_open()) {
+            std::string line;
+            if (std::getline(vf, line)) {
+                while (!line.empty() && (line.back() == '\r' || line.back() == '\n' || line.back() == ' ')) {
+                    line.pop_back();
+                }
+                if (!line.empty()) {
+                    return line;
+                }
+            }
+        }
+    }
+
+    // 2. Check package.json
+    std::filesystem::path pkg_json = sat_dir / "node_modules" / "electron" / "package.json";
+    if (std::filesystem::exists(pkg_json, ec)) {
+        std::ifstream pf(pkg_json);
+        if (pf.is_open()) {
+            try {
+                auto j = nlohmann::json::parse(pf, nullptr, false);
+                if (!j.is_discarded() && j.contains("version") && j["version"].is_string()) {
+                    return j["version"].get<std::string>();
+                }
+            } catch (...) {}
+        }
+    }
+
+    // 3. Check system castlabs-electron
+    if (satellite_dir.empty() && ::system("which castlabs-electron >/dev/null 2>&1") == 0) {
+        FILE* p = ::popen("castlabs-electron -v 2>/dev/null", "r");
+        if (p) {
+            char buf[64] = {0};
+            if (fgets(buf, sizeof(buf), p)) {
+                std::string out(buf);
+                while (!out.empty() && (out.back() == '\r' || out.back() == '\n' || out.back() == ' ')) {
+                    out.pop_back();
+                }
+                ::pclose(p);
+                return out;
+            }
+            ::pclose(p);
+        }
+    }
+
+    return "";
+}
+
+bool DrmSatelliteDaemon::is_castlabs_electron_installed(const std::filesystem::path& satellite_dir) {
+    auto sat_dir = resolve_satellite_dir(satellite_dir);
+    std::error_code ec;
+    std::filesystem::path dist_dir = sat_dir / "node_modules" / "electron" / "dist";
+    std::filesystem::path electron_bin = dist_dir / "electron";
+
+    if (std::filesystem::exists(electron_bin, ec)) {
+        std::string ver = get_installed_electron_version(sat_dir);
+        if (ver.find("44.9.3") != std::string::npos || ver.find("wvcus") != std::string::npos) {
+            return true;
+        }
+    }
+
+    if (satellite_dir.empty() && ::system("which castlabs-electron >/dev/null 2>&1") == 0) {
+        std::string ver = get_installed_electron_version(sat_dir);
+        if (ver.find("44.9.3") != std::string::npos || ver.find("wvcus") != std::string::npos) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+bool DrmSatelliteDaemon::download_castlabs_electron(const std::filesystem::path& satellite_dir, std::string* error_msg) {
+    auto sat_dir = resolve_satellite_dir(satellite_dir);
+    std::error_code ec;
+
+    if (!std::filesystem::exists(sat_dir, ec)) {
+        std::filesystem::create_directories(sat_dir, ec);
+        if (ec) {
+            if (error_msg) *error_msg = "Cannot create satellite directory: " + ec.message();
+            return false;
+        }
+    }
+
+    if (::system("which npm >/dev/null 2>&1") != 0) {
+        if (error_msg) *error_msg = "npm is not installed or not in PATH";
+        return false;
+    }
+
+    std::filesystem::path pkg_json = sat_dir / "package.json";
+    if (!std::filesystem::exists(pkg_json, ec)) {
+        std::ofstream pf(pkg_json);
+        if (pf.is_open()) {
+            pf << "{\n"
+               << "  \"name\": \"sctui-drm-satellite\",\n"
+               << "  \"version\": \"1.0.0\",\n"
+               << "  \"description\": \"Minimal, headless castlabs-electron DRM audio playback satellite daemon for SCTUI\",\n"
+               << "  \"main\": \"main.js\",\n"
+               << "  \"scripts\": {\n"
+               << "    \"start\": \"castlabs-electron main.js\"\n"
+               << "  },\n"
+               << "  \"dependencies\": {\n"
+               << "    \"electron\": \"git+https://github.com/castlabs/electron-releases.git#v44.9.3+wvcus\"\n"
+               << "  },\n"
+               << "  \"private\": true\n"
+               << "}\n";
+            pf.close();
+        }
+    }
+
+    std::string cmd = "cd \"" + sat_dir.string() + "\" && npm install \"https://github.com/castlabs/electron-releases#v44.9.3+wvcus\" --save 2>&1";
+    LOG_INFO("DrmDaemon", "Executing Castlabs Electron installation: " + cmd);
+
+    FILE* pipe = ::popen(cmd.c_str(), "r");
+    if (!pipe) {
+        if (error_msg) *error_msg = "Failed to launch npm install process";
+        return false;
+    }
+
+    std::string output;
+    char buffer[256];
+    while (fgets(buffer, sizeof(buffer), pipe) != nullptr) {
+        output += buffer;
+    }
+
+    int status = ::pclose(pipe);
+    int exit_code = WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+
+    if (exit_code != 0) {
+        LOG_ERROR("DrmDaemon", "npm install exited with code " + std::to_string(exit_code) + ": " + output);
+        if (error_msg) {
+            std::string concise_err = output;
+            if (concise_err.length() > 200) {
+                concise_err = concise_err.substr(concise_err.length() - 200);
+            }
+            while (!concise_err.empty() && (concise_err.back() == '\n' || concise_err.back() == '\r')) {
+                concise_err.pop_back();
+            }
+            *error_msg = "npm install failed (code " + std::to_string(exit_code) + "): " + concise_err;
+        }
+        return false;
+    }
+
+    std::filesystem::path dist_dir = sat_dir / "node_modules" / "electron" / "dist";
+    std::filesystem::path named_symlink = dist_dir / "castlabs-electron";
+    if (std::filesystem::exists(dist_dir, ec) && !std::filesystem::exists(named_symlink, ec)) {
+        std::filesystem::create_symlink("electron", named_symlink, ec);
+    }
+
+    if (!is_castlabs_electron_installed(sat_dir)) {
+        if (error_msg) *error_msg = "Installation completed but Castlabs Electron binary validation failed in " + sat_dir.string();
+        return false;
+    }
+
+    LOG_INFO("DrmDaemon", "Castlabs Electron v44.9.3+wvcus successfully installed in " + sat_dir.string());
+    return true;
+}
 
 DrmSatelliteDaemon::DrmSatelliteDaemon(std::filesystem::path satellite_dir)
     : satellite_dir_(resolve_satellite_dir(satellite_dir)) {}
@@ -98,7 +298,7 @@ std::string DrmSatelliteDaemon::find_executable() const {
     }
 
     // 4. System castlabs-electron in PATH
-    if (::system("which castlabs-electron >/dev/null 2>&1") == 0) {
+    if (satellite_dir_.empty() && ::system("which castlabs-electron >/dev/null 2>&1") == 0) {
         return "castlabs-electron";
     }
 
@@ -121,6 +321,11 @@ bool DrmSatelliteDaemon::start() {
     }
 
     satellite_dir_ = resolve_satellite_dir(satellite_dir_);
+    if (!is_castlabs_electron_installed(satellite_dir_)) {
+        LOG_ERROR("DrmDaemon", "Castlabs Electron is not installed or version mismatch in " + satellite_dir_.string());
+        return false;
+    }
+
     std::filesystem::path main_js = satellite_dir_ / "main.js";
     if (!std::filesystem::exists(main_js)) {
         LOG_ERROR("DrmDaemon", "satellite/main.js not found at " + main_js.string());
@@ -451,6 +656,12 @@ void DrmSatelliteDaemon::handle_ipc_message(const std::string& line) {
             if (on_finished_) on_finished_(track_id);
         } else if (type == "error") {
             std::string msg = j.value("message", "DRM daemon error");
+            if (msg.find("interrupted by a new load request") != std::string::npos ||
+                msg.find("interrupted by a call to pause") != std::string::npos ||
+                msg.find("AbortError") != std::string::npos) {
+                LOG_DEBUG("DrmDaemon", "Ignoring benign playback abort/interruption: " + msg);
+                return;
+            }
             LOG_ERROR("DrmDaemon", "DRM satellite error: " + msg);
             {
                 std::lock_guard<std::mutex> lock(state_mutex_);

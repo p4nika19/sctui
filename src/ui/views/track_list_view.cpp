@@ -43,9 +43,62 @@ TrackListView::TrackListView(
     on_like_(std::move(on_like)),
     on_select_playlist_(std::move(on_select_playlist)) {
 
+    InputOption search_opt;
+    search_opt.multiline = false;
+    search_opt.cursor_position = &search_cursor_pos_;
+    search_opt.on_change = [this]() {
+        search_query_.erase(
+            std::remove(search_query_.begin(), search_query_.end(), '\n'),
+            search_query_.end()
+        );
+        search_query_.erase(
+            std::remove(search_query_.begin(), search_query_.end(), '\r'),
+            search_query_.end()
+        );
+        set_current_selected_index(0);
+        scroll_offset_ = 0;
+    };
+    search_input_comp_ = Input(&search_query_, "Type to search...", search_opt);
+
     component_ = CatchEvent(Make<ComponentBase>(), [this](Event event) {
         if (state_.focused_panel != models::FocusPanel::TrackList) {
             return false;
+        }
+
+        bool is_alt_slash = (event == Event::Special("\x1b/") || event.input() == "\x1b/");
+        if (is_alt_slash) {
+            if (state_.current_view == models::ViewMode::Likes || state_.current_view == models::ViewMode::Playlists) {
+                toggle_search();
+                return true;
+            }
+        }
+
+        if (search_active_ && search_input_focused_) {
+            if (event == Event::Escape) {
+                close_search();
+                return true;
+            }
+            if (event == Event::Return) {
+                play_selected();
+                return true;
+            }
+            if (event == Event::ArrowDown) {
+                scroll_down();
+                return true;
+            }
+            if (event == Event::ArrowUp) {
+                scroll_up();
+                return true;
+            }
+            if (event == Event::PageDown) {
+                set_current_selected_index(get_current_selected_index() + 10);
+                return true;
+            }
+            if (event == Event::PageUp) {
+                set_current_selected_index(get_current_selected_index() - 10);
+                return true;
+            }
+            return search_input_comp_->OnEvent(event);
         }
 
         if (event == Event::Character('j') || event == Event::ArrowDown) {
@@ -61,6 +114,10 @@ TrackListView::TrackListView(
             return true;
         }
         if (event == Event::Escape || event == Event::Character('h') || event == Event::ArrowLeft) {
+            if (search_active_) {
+                close_search();
+                return true;
+            }
             if (state_.current_view == models::ViewMode::Playlists && state_.selected_playlist.has_value()) {
                 state_.selected_playlist.reset();
                 state_.playlist_tracks.clear();
@@ -91,8 +148,9 @@ TrackListView::TrackListView(
         }
         if (event == Event::Character('G') || event == Event::End) {
             if (state_.current_view == models::ViewMode::Playlists && !state_.selected_playlist.has_value()) {
-                if (!state_.playlists.empty()) {
-                    set_current_selected_index(static_cast<int>(state_.playlists.size() - 1));
+                const auto& pls = get_current_playlist_list();
+                if (!pls.empty()) {
+                    set_current_selected_index(static_cast<int>(pls.size() - 1));
                 }
             } else {
                 const auto& tracks = get_current_track_list();
@@ -111,26 +169,128 @@ Component TrackListView::get_component() {
     return component_;
 }
 
+void TrackListView::toggle_search() {
+    if (state_.current_view != models::ViewMode::Likes && state_.current_view != models::ViewMode::Playlists) {
+        return;
+    }
+    search_active_ = !search_active_;
+    search_input_focused_ = search_active_;
+    if (!search_active_) {
+        search_query_.clear();
+        search_cursor_pos_ = 0;
+    } else {
+        search_input_comp_->TakeFocus();
+    }
+    set_current_selected_index(0);
+    scroll_offset_ = 0;
+}
+
+void TrackListView::close_search() {
+    search_active_ = false;
+    search_input_focused_ = false;
+    search_query_.clear();
+    search_cursor_pos_ = 0;
+    set_current_selected_index(0);
+    scroll_offset_ = 0;
+}
+
+void TrackListView::finish_search_typing() {
+    search_input_focused_ = false;
+}
+
+const std::vector<models::Playlist>& TrackListView::get_current_playlist_list() const {
+    if (state_.current_view == models::ViewMode::Playlists && !state_.selected_playlist.has_value()) {
+        if (!search_active_ || search_query_.empty()) {
+            return state_.playlists;
+        }
+        if (last_cached_query_ == search_query_ && last_cached_view_ == state_.current_view) {
+            return filtered_playlists_;
+        }
+        filtered_playlists_.clear();
+        std::string q = search_query_;
+        std::transform(q.begin(), q.end(), q.begin(), ::tolower);
+        for (const auto& pl : state_.playlists) {
+            std::string t = pl.title;
+            std::transform(t.begin(), t.end(), t.begin(), ::tolower);
+            if (t.find(q) != std::string::npos) {
+                filtered_playlists_.push_back(pl);
+            }
+        }
+        last_cached_query_ = search_query_;
+        last_cached_view_ = state_.current_view;
+        return filtered_playlists_;
+    }
+    static const std::vector<models::Playlist> empty_playlists;
+    return empty_playlists;
+}
+
 const std::vector<models::Track>& TrackListView::get_current_track_list() const {
+    const std::vector<models::Track>* raw_list = nullptr;
     switch (state_.current_view) {
         case models::ViewMode::Search:
-            return state_.search_results;
+            raw_list = &state_.search_results;
+            break;
         case models::ViewMode::Stream:
-            return state_.stream_tracks;
+            raw_list = &state_.stream_tracks;
+            break;
         case models::ViewMode::Likes:
-            return state_.likes_tracks;
+            raw_list = &state_.likes_tracks;
+            break;
         case models::ViewMode::Playlists:
-            return state_.playlist_tracks;
+            raw_list = &state_.playlist_tracks;
+            break;
         case models::ViewMode::Queue:
-            return state_.queue.tracks;
+            raw_list = &state_.queue.tracks;
+            break;
         case models::ViewMode::Account:
-        case models::ViewMode::Settings: {
-            static const std::vector<models::Track> empty_tracks;
-            return empty_tracks;
-        }
+        case models::ViewMode::Settings:
+            break;
     }
-    static const std::vector<models::Track> empty_tracks;
-    return empty_tracks;
+
+    if (!raw_list) {
+        static const std::vector<models::Track> empty_tracks;
+        return empty_tracks;
+    }
+
+    if ((state_.current_view == models::ViewMode::Likes ||
+         (state_.current_view == models::ViewMode::Playlists && state_.selected_playlist.has_value())) &&
+        search_active_ && !search_query_.empty()) {
+
+        uint64_t cur_pl_id = state_.selected_playlist ? state_.selected_playlist->id : 0;
+        if (last_cached_query_ == search_query_ &&
+            last_cached_view_ == state_.current_view &&
+            last_cached_playlist_id_ == cur_pl_id) {
+            return filtered_tracks_;
+        }
+
+        filtered_tracks_.clear();
+        filtered_original_indices_.clear();
+        std::string q = search_query_;
+        std::transform(q.begin(), q.end(), q.begin(), ::tolower);
+
+        for (size_t i = 0; i < raw_list->size(); ++i) {
+            const auto& t = (*raw_list)[i];
+            std::string title_l = t.title;
+            std::transform(title_l.begin(), title_l.end(), title_l.begin(), ::tolower);
+            std::string artist_l = t.artist;
+            std::transform(artist_l.begin(), artist_l.end(), artist_l.begin(), ::tolower);
+            std::string genre_l = t.genre;
+            std::transform(genre_l.begin(), genre_l.end(), genre_l.begin(), ::tolower);
+
+            if (title_l.find(q) != std::string::npos ||
+                artist_l.find(q) != std::string::npos ||
+                genre_l.find(q) != std::string::npos) {
+                filtered_tracks_.push_back(t);
+                filtered_original_indices_.push_back(i);
+            }
+        }
+        last_cached_query_ = search_query_;
+        last_cached_view_ = state_.current_view;
+        last_cached_playlist_id_ = cur_pl_id;
+        return filtered_tracks_;
+    }
+
+    return *raw_list;
 }
 
 int TrackListView::get_current_selected_index() const {
@@ -157,8 +317,9 @@ int TrackListView::get_current_selected_index() const {
 
 void TrackListView::set_current_selected_index(int index) {
     if (state_.current_view == models::ViewMode::Playlists && !state_.selected_playlist.has_value()) {
-        if (state_.playlists.empty()) return;
-        state_.playlist_selected_index = std::clamp(index, 0, static_cast<int>(state_.playlists.size() - 1));
+        const auto& pls = get_current_playlist_list();
+        if (pls.empty()) return;
+        state_.playlist_selected_index = std::clamp(index, 0, static_cast<int>(pls.size() - 1));
         return;
     }
 
@@ -197,7 +358,8 @@ void TrackListView::scroll_up() {
 void TrackListView::select_row(int visible_row) {
     int target_idx = scroll_offset_ + visible_row;
     if (state_.current_view == models::ViewMode::Playlists && !state_.selected_playlist.has_value()) {
-        if (target_idx >= 0 && target_idx < static_cast<int>(state_.playlists.size())) {
+        const auto& pls = get_current_playlist_list();
+        if (target_idx >= 0 && target_idx < static_cast<int>(pls.size())) {
             set_current_selected_index(target_idx);
             play_selected();
         }
@@ -212,9 +374,11 @@ void TrackListView::select_row(int visible_row) {
 
 void TrackListView::play_selected() {
     if (state_.current_view == models::ViewMode::Playlists && !state_.selected_playlist.has_value()) {
-        if (on_select_playlist_ && !state_.playlists.empty()) {
-            int idx = std::clamp(state_.playlist_selected_index, 0, static_cast<int>(state_.playlists.size() - 1));
-            on_select_playlist_(state_.playlists[static_cast<size_t>(idx)]);
+        const auto& pls = get_current_playlist_list();
+        if (on_select_playlist_ && !pls.empty()) {
+            int idx = std::clamp(state_.playlist_selected_index, 0, static_cast<int>(pls.size() - 1));
+            on_select_playlist_(pls[static_cast<size_t>(idx)]);
+            close_search();
         }
         return;
     }
@@ -253,21 +417,44 @@ Element TrackListView::render(bool is_focused) {
     auto border_col = is_focused ? accent : Color::GrayDark;
 
     if (state_.current_view == models::ViewMode::Playlists && !state_.selected_playlist.has_value()) {
-        if (state_.playlists.empty()) {
+        const auto& playlists = get_current_playlist_list();
+
+        Element middle_elem = filler();
+        if (search_active_) {
+            middle_elem = hbox({
+                text(" 🔍 ") | color(accent),
+                search_input_comp_->Render() | xflex,
+                text(" [Esc to close] ") | color(Color::GrayDark) | dim
+            }) | borderRounded | color(accent) | size(WIDTH, GREATER_THAN, 28) | size(WIDTH, LESS_THAN, 48);
+        } else {
+            middle_elem = text(" [alt+/ to search in playlists] ") | color(Color::RGB(100, 100, 110)) | dim;
+        }
+
+        if (playlists.empty()) {
+            std::string empty_msg = state_.is_loading ? "Loading playlists..." : "No playlists found for your account.";
+            if (search_active_ && !search_query_.empty()) {
+                empty_msg = "No playlists matching '" + search_query_ + "'. Press Esc to clear.";
+            }
             auto empty_box = vbox({
                 filler(),
-                text(state_.is_loading ? "Loading playlists..." : "No playlists found for your account.") | color(Color::GrayLight) | center,
+                text(empty_msg) | color(Color::GrayLight) | center,
                 filler()
             });
             return vbox({
-                text(" PLAYLISTS ") | color(border_col) | bold,
+                hbox({
+                    text(" PLAYLISTS ") | color(border_col) | bold,
+                    filler(),
+                    middle_elem,
+                    filler(),
+                    text(" 0/0 ") | color(Color::GrayDark)
+                }),
                 separator(),
                 empty_box | yflex
             }) | borderRounded | color(border_col) | yflex;
         }
 
         int viewport_height = std::max(3, state_.terminal_height - 16);
-        int selected_idx = std::clamp(state_.playlist_selected_index, 0, static_cast<int>(state_.playlists.size() - 1));
+        int selected_idx = std::clamp(state_.playlist_selected_index, 0, static_cast<int>(playlists.size() - 1));
         if (selected_idx < scroll_offset_) {
             scroll_offset_ = selected_idx;
         } else if (selected_idx >= scroll_offset_ + viewport_height) {
@@ -275,7 +462,7 @@ Element TrackListView::render(bool is_focused) {
         }
 
         int start_idx = scroll_offset_;
-        int end_idx = std::min(static_cast<int>(state_.playlists.size()), start_idx + viewport_height);
+        int end_idx = std::min(static_cast<int>(playlists.size()), start_idx + viewport_height);
 
         Elements rows;
         Elements header_cols;
@@ -290,7 +477,7 @@ Element TrackListView::render(bool is_focused) {
         rows.push_back(separatorLight());
 
         for (int i = start_idx; i < end_idx; ++i) {
-            const auto& pl = state_.playlists[static_cast<size_t>(i)];
+            const auto& pl = playlists[static_cast<size_t>(i)];
             bool is_selected = (i == selected_idx);
 
             Elements cols;
@@ -333,10 +520,12 @@ Element TrackListView::render(bool is_focused) {
             rows.push_back(row_elem);
         }
 
-        std::string count_info = " " + std::to_string(selected_idx + 1) + "/" + std::to_string(state_.playlists.size()) + " ";
+        std::string count_info = " " + std::to_string(selected_idx + 1) + "/" + std::to_string(playlists.size()) + " ";
         return vbox({
             hbox({
                 text(" PLAYLISTS (Press Enter to open) ") | color(border_col) | bold,
+                filler(),
+                middle_elem,
                 filler(),
                 text(count_info) | color(Color::GrayDark)
             }),
@@ -359,9 +548,34 @@ Element TrackListView::render(bool is_focused) {
         panel_title = " SEARCH RESULTS ";
     }
 
+    Element middle_elem = filler();
+    if (state_.current_view == models::ViewMode::Likes) {
+        if (search_active_) {
+            middle_elem = hbox({
+                text(" 🔍 ") | color(accent),
+                search_input_comp_->Render() | xflex,
+                text(" [Esc to close] ") | color(Color::GrayDark) | dim
+            }) | borderRounded | color(accent) | size(WIDTH, GREATER_THAN, 28) | size(WIDTH, LESS_THAN, 48);
+        } else {
+            middle_elem = text(" [alt+/ to search in likes] ") | color(Color::RGB(100, 100, 110)) | dim;
+        }
+    } else if (state_.current_view == models::ViewMode::Playlists && state_.selected_playlist) {
+        if (search_active_) {
+            middle_elem = hbox({
+                text(" 🔍 ") | color(accent),
+                search_input_comp_->Render() | xflex,
+                text(" [Esc to close] ") | color(Color::GrayDark) | dim
+            }) | borderRounded | color(accent) | size(WIDTH, GREATER_THAN, 28) | size(WIDTH, LESS_THAN, 48);
+        } else {
+            middle_elem = text(" [alt+/ to search in playlist] ") | color(Color::RGB(100, 100, 110)) | dim;
+        }
+    }
+
     if (tracks.empty()) {
         std::string empty_msg = "No tracks found.";
-        if (state_.current_view == models::ViewMode::Playlists && state_.selected_playlist) {
+        if (search_active_ && !search_query_.empty()) {
+            empty_msg = "No tracks matching '" + search_query_ + "'. Press Esc to clear.";
+        } else if (state_.current_view == models::ViewMode::Playlists && state_.selected_playlist) {
             empty_msg = state_.is_loading
                 ? "Loading tracks for playlist '" + state_.selected_playlist->title + "' (" + std::to_string(state_.selected_playlist->track_count) + " tracks)..."
                 : "This playlist is empty.";
@@ -384,7 +598,13 @@ Element TrackListView::render(bool is_focused) {
         });
 
         return vbox({
-            text(panel_title) | color(border_col) | bold,
+            hbox({
+                text(panel_title) | color(border_col) | bold,
+                filler(),
+                middle_elem,
+                filler(),
+                text(" 0/0 ") | color(Color::GrayDark)
+            }),
             separator(),
             empty_box | yflex
         }) | borderRounded | color(border_col) | yflex;
@@ -521,6 +741,8 @@ Element TrackListView::render(bool is_focused) {
     return vbox({
         hbox({
             text(panel_title) | color(border_col) | bold,
+            filler(),
+            middle_elem,
             filler(),
             text(count_info) | color(Color::GrayDark)
         }),

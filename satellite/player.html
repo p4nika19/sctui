@@ -138,12 +138,20 @@
             hls.loadSource(streamUrl);
             hls.attachMedia(audio);
 
+            const isBenignPlayAbort = (err) => {
+              if (!err) return false;
+              if (err.name === 'AbortError') return true;
+              const msg = String(err.message || err);
+              return msg.includes('interrupted by a new load request') || msg.includes('interrupted by a call to pause');
+            };
+
             hls.on(window.Hls.Events.MANIFEST_PARSED, () => {
               ensureAudioContext();
               audio.volume = currentVolume;
               const playPromise = audio.play();
               if (playPromise !== undefined) {
                 playPromise.catch((err) => {
+                  if (isBenignPlayAbort(err)) return;
                   window.sctuiBridge.sendEvent({
                     type: 'error',
                     message: err ? err.message : 'Audio play() rejected'
@@ -176,6 +184,7 @@
             const playPromise = audio.play();
             if (playPromise !== undefined) {
               playPromise.catch((err) => {
+                if (isBenignPlayAbort(err)) return;
                 window.sctuiBridge.sendEvent({
                   type: 'error',
                   message: err ? err.message : 'Audio play() rejected'

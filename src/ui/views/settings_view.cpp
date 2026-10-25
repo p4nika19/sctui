@@ -2,6 +2,7 @@
 #include "sctui/ui/theme_symbols.hpp"
 #include "sctui/core/cover_art.hpp"
 #include "sctui/core/cookie_extractor.hpp"
+#include "sctui/audio/drm_daemon.hpp"
 #include <ftxui/component/event.hpp>
 #include <ftxui/dom/elements.hpp>
 #include <algorithm>
@@ -14,7 +15,7 @@ using namespace ftxui;
 namespace {
 constexpr size_t kCacheSizes[] = { 256, 512, 1024, 2048, 4096, 8192, 0 }; // 0 = unlimited
 constexpr int kNumCacheSizes = sizeof(kCacheSizes) / sizeof(kCacheSizes[0]);
-constexpr int kTotalFields = 20;
+constexpr int kTotalFields = 19;
 }
 
 SettingsView::SettingsView(
@@ -202,8 +203,8 @@ SettingsView::SettingsView(
                 state_.icon_style = static_cast<core::IconStyle>(icon_style_idx_);
                 return true;
             }
-            if (selected_field_ == 4) { // Fullscreen Visualizer Mirrored
-                fullscreen_visualizer_mirrored_ = !fullscreen_visualizer_mirrored_;
+            if (selected_field_ == 4) { // Fullscreen Visualizer Style
+                fullscreen_visualizer_style_ = static_cast<core::FullscreenVisualizerStyle>((static_cast<int>(fullscreen_visualizer_style_) + 2) % 3);
                 return true;
             }
             if (selected_field_ == 5) { // DNS Mode
@@ -231,23 +232,19 @@ SettingsView::SettingsView(
                 dont_count_liked_in_general_cache_ = !dont_count_liked_in_general_cache_;
                 return true;
             }
-            if (selected_field_ == 14) { // Volume
-                volume_input_ = std::max(0, volume_input_ - 5);
-                return true;
-            }
-            if (selected_field_ == 15) { // Discord Rich Presence
+            if (selected_field_ == 14) { // Discord Rich Presence
                 discord_rpc_enabled_ = !discord_rpc_enabled_;
                 return true;
             }
-            if (selected_field_ == 16) { // Mouse Controls
+            if (selected_field_ == 15) { // Mouse Controls
                 mouse_control_ = !mouse_control_;
                 return true;
             }
-            if (selected_field_ == 17) { // DRM Playback Engine
+            if (selected_field_ == 16) { // DRM Playback Engine
                 drm_engine_enabled_ = !drm_engine_enabled_;
                 return true;
             }
-            if (selected_field_ == 18) { // Download DRM in Likes
+            if (selected_field_ == 17) { // Download DRM in Likes
                 download_drm_tracks_in_likes_ = !download_drm_tracks_in_likes_;
                 return true;
             }
@@ -268,7 +265,7 @@ SettingsView::SettingsView(
                 return true;
             }
             if (selected_field_ == 4) {
-                fullscreen_visualizer_mirrored_ = !fullscreen_visualizer_mirrored_;
+                fullscreen_visualizer_style_ = static_cast<core::FullscreenVisualizerStyle>((static_cast<int>(fullscreen_visualizer_style_) + 1) % 3);
                 return true;
             }
             if (selected_field_ == 5) {
@@ -297,22 +294,18 @@ SettingsView::SettingsView(
                 return true;
             }
             if (selected_field_ == 14) {
-                volume_input_ = std::min(150, volume_input_ + 5);
-                return true;
-            }
-            if (selected_field_ == 15) {
                 discord_rpc_enabled_ = !discord_rpc_enabled_;
                 return true;
             }
-            if (selected_field_ == 16) {
+            if (selected_field_ == 15) {
                 mouse_control_ = !mouse_control_;
                 return true;
             }
-            if (selected_field_ == 17) {
+            if (selected_field_ == 16) {
                 drm_engine_enabled_ = !drm_engine_enabled_;
                 return true;
             }
-            if (selected_field_ == 18) {
+            if (selected_field_ == 17) {
                 download_drm_tracks_in_likes_ = !download_drm_tracks_in_likes_;
                 return true;
             }
@@ -343,7 +336,7 @@ SettingsView::SettingsView(
                 return true;
             }
             if (selected_field_ == 4) {
-                fullscreen_visualizer_mirrored_ = !fullscreen_visualizer_mirrored_;
+                fullscreen_visualizer_style_ = static_cast<core::FullscreenVisualizerStyle>((static_cast<int>(fullscreen_visualizer_style_) + 1) % 3);
                 return true;
             }
             if (selected_field_ == 5) {
@@ -385,23 +378,23 @@ SettingsView::SettingsView(
                 }
                 return true;
             }
-            if (selected_field_ == 15) { // Discord Rich Presence
+            if (selected_field_ == 14) { // Discord Rich Presence
                 discord_rpc_enabled_ = !discord_rpc_enabled_;
                 return true;
             }
-            if (selected_field_ == 16) { // Mouse Controls
+            if (selected_field_ == 15) { // Mouse Controls
                 mouse_control_ = !mouse_control_;
                 return true;
             }
-            if (selected_field_ == 17) { // DRM Playback Engine
+            if (selected_field_ == 16) { // DRM Playback Engine
                 drm_engine_enabled_ = !drm_engine_enabled_;
                 return true;
             }
-            if (selected_field_ == 18) { // Download DRM in Likes
+            if (selected_field_ == 17) { // Download DRM in Likes
                 download_drm_tracks_in_likes_ = !download_drm_tracks_in_likes_;
                 return true;
             }
-            if (selected_field_ == 19) { // Save & Apply
+            if (selected_field_ == 18) { // Save & Apply
                 config_.image_protocol = static_cast<core::ImageProtocol>(image_protocol_idx_);
                 config_.icon_style = static_cast<core::IconStyle>(icon_style_idx_);
                 state_.icon_style = config_.icon_style;
@@ -413,12 +406,12 @@ SettingsView::SettingsView(
                 config_.max_cache_size_mb = max_cache_size_mb_;
                 config_.lock_liked_tracks_in_cache = lock_liked_tracks_in_cache_;
                 config_.dont_count_liked_in_general_cache = dont_count_liked_in_general_cache_;
-                config_.volume = volume_input_;
                 config_.discord_rpc_enabled = discord_rpc_enabled_;
                 config_.mouse_control = mouse_control_;
                 config_.drm_engine_enabled = drm_engine_enabled_;
                 config_.download_drm_tracks_in_likes = download_drm_tracks_in_likes_;
-                config_.fullscreen_visualizer_mirrored = fullscreen_visualizer_mirrored_;
+                config_.fullscreen_visualizer_style = fullscreen_visualizer_style_;
+                config_.fullscreen_visualizer_mirrored = (fullscreen_visualizer_style_ != core::FullscreenVisualizerStyle::Stretched);
                 state_.drm_engine_enabled = drm_engine_enabled_;
                 state_.download_drm_tracks_in_likes = download_drm_tracks_in_likes_;
 
@@ -462,12 +455,11 @@ void SettingsView::reload_from_config() {
     max_cache_size_mb_ = config_.max_cache_size_mb;
     lock_liked_tracks_in_cache_ = config_.lock_liked_tracks_in_cache;
     dont_count_liked_in_general_cache_ = config_.dont_count_liked_in_general_cache;
-    volume_input_ = config_.volume;
     discord_rpc_enabled_ = config_.discord_rpc_enabled;
     mouse_control_ = config_.mouse_control;
     drm_engine_enabled_ = config_.drm_engine_enabled;
     download_drm_tracks_in_likes_ = config_.download_drm_tracks_in_likes;
-    fullscreen_visualizer_mirrored_ = config_.fullscreen_visualizer_mirrored;
+    fullscreen_visualizer_style_ = config_.fullscreen_visualizer_style;
 }
 
 void SettingsView::reset_selection() {
@@ -509,7 +501,7 @@ void SettingsView::select_field(int field_idx) {
     }
 }
 
-bool SettingsView::handle_mouse_click(int y, int x) {
+bool SettingsView::handle_mouse_click(int y, [[maybe_unused]] int x) {
     if (y == login_url_row_) {
         int ret = std::system("xdg-open https://soundcloud.com/signin >/dev/null 2>&1 &");
         (void)ret;
@@ -547,8 +539,8 @@ bool SettingsView::handle_mouse_click(int y, int x) {
         state_.icon_style = static_cast<core::IconStyle>(icon_style_idx_);
         return true;
     }
-    if (field == 4) { // Fullscreen Visualizer Mirrored
-        fullscreen_visualizer_mirrored_ = !fullscreen_visualizer_mirrored_;
+    if (field == 4) { // Fullscreen Visualizer Style
+        fullscreen_visualizer_style_ = static_cast<core::FullscreenVisualizerStyle>((static_cast<int>(fullscreen_visualizer_style_) + 1) % 3);
         return true;
     }
     if (field == 5) { // DNS Mode
@@ -590,35 +582,23 @@ bool SettingsView::handle_mouse_click(int y, int x) {
         }
         return true;
     }
-    if (field == 14) { // Volume
-        if (x >= 32 && x <= 62) {
-            float ratio = static_cast<float>(x - 34) / 20.0f;
-            ratio = std::clamp(ratio, 0.0f, 1.0f);
-            volume_input_ = static_cast<int>(std::round(ratio * 150.0f));
-            state_.volume_percent = static_cast<float>(volume_input_);
-        } else {
-            volume_input_ = (volume_input_ + 10) % 160;
-            state_.volume_percent = static_cast<float>(volume_input_);
-        }
-        return true;
-    }
-    if (field == 15) { // Discord Rich Presence
+    if (field == 14) { // Discord Rich Presence
         discord_rpc_enabled_ = !discord_rpc_enabled_;
         return true;
     }
-    if (field == 16) { // Mouse Controls
+    if (field == 15) { // Mouse Controls
         mouse_control_ = !mouse_control_;
         return true;
     }
-    if (field == 17) { // DRM Playback Engine
+    if (field == 16) { // DRM Playback Engine
         drm_engine_enabled_ = !drm_engine_enabled_;
         return true;
     }
-    if (field == 18) { // Download DRM in Likes
+    if (field == 17) { // Download DRM in Likes
         download_drm_tracks_in_likes_ = !download_drm_tracks_in_likes_;
         return true;
     }
-    if (field == 19) { // Apply Changes
+    if (field == 18) { // Apply Changes
         config_.image_protocol = static_cast<core::ImageProtocol>(image_protocol_idx_);
         config_.icon_style = static_cast<core::IconStyle>(icon_style_idx_);
         state_.icon_style = config_.icon_style;
@@ -630,12 +610,12 @@ bool SettingsView::handle_mouse_click(int y, int x) {
         config_.max_cache_size_mb = max_cache_size_mb_;
         config_.lock_liked_tracks_in_cache = lock_liked_tracks_in_cache_;
         config_.dont_count_liked_in_general_cache = dont_count_liked_in_general_cache_;
-        config_.volume = volume_input_;
         config_.discord_rpc_enabled = discord_rpc_enabled_;
         config_.mouse_control = mouse_control_;
         config_.drm_engine_enabled = drm_engine_enabled_;
         config_.download_drm_tracks_in_likes = download_drm_tracks_in_likes_;
-        config_.fullscreen_visualizer_mirrored = fullscreen_visualizer_mirrored_;
+        config_.fullscreen_visualizer_style = fullscreen_visualizer_style_;
+        config_.fullscreen_visualizer_mirrored = (fullscreen_visualizer_style_ != core::FullscreenVisualizerStyle::Stretched);
         state_.drm_engine_enabled = drm_engine_enabled_;
         state_.download_drm_tracks_in_likes = download_drm_tracks_in_likes_;
 
@@ -867,36 +847,58 @@ Element SettingsView::render(bool is_focused) {
         stats_str = "Cache manager active";
     }
 
-    // 14. Volume (0 - 150%)
-    auto vol_bar = gauge(volume_input_ / 150.0f) | color(volume_input_ > 100 ? Color::RGB(255, 140, 0) : accent) | size(WIDTH, EQUAL, 16);
-    auto vol_elem = hbox({
-        text("< " + std::to_string(volume_input_) + "% > ") | (selected_field_ == 14 && is_focused ? color(accent) | bold : color(volume_input_ > 100 ? Color::RGB(255, 140, 0) : Color::White)),
-        vol_bar
-    });
-
-    // 15. Discord Rich Presence
+    // 14. Discord Rich Presence
     auto discord_rpc_elem = text(discord_rpc_enabled_ ? "< Enabled >" : "< Disabled >")
-        | (selected_field_ == 15 && is_focused ? color(accent) | bold : color(discord_rpc_enabled_ ? Color::GreenLight : Color::GrayLight));
+        | (selected_field_ == 14 && is_focused ? color(accent) | bold : color(discord_rpc_enabled_ ? Color::GreenLight : Color::GrayLight));
 
-    // 16. TUI Mouse Controls
+    // 15. TUI Mouse Controls
     auto mouse_ctrl_elem = text(mouse_control_ ? "< Enabled >" : "< Disabled >")
-        | (selected_field_ == 16 && is_focused ? color(accent) | bold : color(mouse_control_ ? Color::GreenLight : Color::GrayLight));
+        | (selected_field_ == 15 && is_focused ? color(accent) | bold : color(mouse_control_ ? Color::GreenLight : Color::GrayLight));
 
-    // 17. DRM Playback Engine
-    auto drm_elem = text(drm_engine_enabled_ ? "< Enabled (CastLabs Daemon) >" : "< Disabled >")
-        | (selected_field_ == 17 && is_focused ? color(accent) | bold : color(drm_engine_enabled_ ? Color::GreenLight : Color::GrayLight));
+    // 16. DRM Playback Engine
+    bool electron_installed = audio::DrmSatelliteDaemon::is_castlabs_electron_installed();
+    std::string drm_status_str;
+    ftxui::Color drm_status_color = Color::GrayLight;
+    if (!drm_engine_enabled_) {
+        drm_status_str = "< Disabled >";
+        drm_status_color = Color::GrayLight;
+    } else if (state_.is_downloading_electron) {
+        drm_status_str = "< Downloading Electron... >";
+        drm_status_color = Color::YellowLight;
+    } else if (electron_installed) {
+        drm_status_str = "< Enabled (CastLabs Daemon) >";
+        drm_status_color = Color::GreenLight;
+    } else {
+        drm_status_str = "< Enabled (Download Required) >";
+        drm_status_color = Color::YellowLight;
+    }
 
-    // 18. Download DRM in Likes
+    auto drm_elem = text(drm_status_str)
+        | (selected_field_ == 16 && is_focused ? color(accent) | bold : color(drm_status_color));
+
+    // 17. Download DRM in Likes
     auto drm_download_elem = text(download_drm_tracks_in_likes_ ? "< Enabled (Non-GO tracks) >" : "< Disabled >")
-        | (selected_field_ == 18 && is_focused ? color(accent) | bold : color(download_drm_tracks_in_likes_ ? Color::GreenLight : Color::GrayLight));
+        | (selected_field_ == 17 && is_focused ? color(accent) | bold : color(download_drm_tracks_in_likes_ ? Color::GreenLight : Color::GrayLight));
 
-    // 4. Fullscreen Visualizer Mirrored
-    auto vis_style_elem = text(fullscreen_visualizer_mirrored_ ? "< Centered & Mirrored >" : "< Stretched (Full Width) >")
-        | (selected_field_ == 4 && is_focused ? color(accent) | bold : color(fullscreen_visualizer_mirrored_ ? Color::CyanLight : Color::White));
+    // 4. Fullscreen Visualizer Style
+    std::string vis_str;
+    switch (fullscreen_visualizer_style_) {
+        case core::FullscreenVisualizerStyle::Stretched:
+            vis_str = "< Stretched (Full Width) >";
+            break;
+        case core::FullscreenVisualizerStyle::LowFreqCentered:
+            vis_str = "< Low Freq Centered & Mirrored >";
+            break;
+        case core::FullscreenVisualizerStyle::HighFreqCentered:
+            vis_str = "< High Freq Centered & Mirrored >";
+            break;
+    }
+    auto vis_style_elem = text(vis_str)
+        | (selected_field_ == 4 && is_focused ? color(accent) | bold : color(fullscreen_visualizer_style_ != core::FullscreenVisualizerStyle::Stretched ? Color::CyanLight : Color::White));
 
-    // 19. Save & Apply button
+    // 18. Save & Apply button
     auto btn_save = text(" [ " + sym.save + " Save & Apply Settings ] ")
-        | (selected_field_ == 19 && is_focused ? bgcolor(accent) | color(Color::Black) | bold : bgcolor(Color::RGB(30, 30, 35)) | color(accent) | bold);
+        | (selected_field_ == 18 && is_focused ? bgcolor(accent) | color(Color::Black) | bold : bgcolor(Color::RGB(30, 30, 35)) | color(accent) | bold);
 
     // Header Title
     content.push_back(hbox({
@@ -963,11 +965,10 @@ Element SettingsView::render(bool is_focused) {
 
     // Section: Audio Output & Integrations
     content.push_back(text(" " + sym.audio + " AUDIO ENGINE & INTEGRATIONS ") | color(Color::White) | bold);
-    content.push_back(render_row(14, "Default Volume Level", vol_elem));
-    content.push_back(render_row(15, "Discord Rich Presence", discord_rpc_elem, "Shows currently playing SoundCloud track in Discord status"));
-    content.push_back(render_row(16, "TUI Mouse Controls", mouse_ctrl_elem, "Allows controlling playback, seeking, scrolling, and tab selection with mouse"));
-    content.push_back(render_row(17, "DRM Playback Engine", drm_elem, "Uses background CastLabs Electron daemon for Widevine streams"));
-    content.push_back(render_row(18, "Download DRM in Likes", drm_download_elem, "Downloads DRM-protected tracks (non-GO) during likes download"));
+    content.push_back(render_row(14, "Discord Rich Presence", discord_rpc_elem, "Shows currently playing SoundCloud track in Discord status"));
+    content.push_back(render_row(15, "TUI Mouse Controls", mouse_ctrl_elem, "Allows controlling playback, seeking, scrolling, and tab selection with mouse"));
+    content.push_back(render_row(16, "DRM Playback Engine", drm_elem, "Uses background CastLabs Electron daemon for Widevine streams"));
+    content.push_back(render_row(17, "Download DRM in Likes", drm_download_elem, "Downloads DRM-protected tracks (non-GO) during likes download"));
     content.push_back(hbox({
         text("   Cache Directory:        ") | color(Color::GrayDark),
         text(config_.cache_dir) | color(Color::GrayDark)
@@ -975,7 +976,7 @@ Element SettingsView::render(bool is_focused) {
     content.push_back(text(""));
 
     // Section: Save & Apply
-    content.push_back(render_row(19, "Apply Changes", btn_save));
+    content.push_back(render_row(18, "Apply Changes", btn_save));
     if (!feedback_message_.empty()) {
         content.push_back(text(""));
         content.push_back(hbox({

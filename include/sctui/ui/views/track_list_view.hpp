@@ -35,8 +35,14 @@ public:
     void toggle_like_selected();
 
     [[nodiscard]] const std::vector<models::Track>& get_current_track_list() const;
+    [[nodiscard]] const std::vector<models::Playlist>& get_current_playlist_list() const;
     [[nodiscard]] int get_current_selected_index() const;
     void set_current_selected_index(int index);
+
+    [[nodiscard]] bool is_searching() const noexcept { return search_active_; }
+    void toggle_search();
+    void close_search();
+    void finish_search_typing();
 
 private:
     models::AppState& state_;
@@ -45,7 +51,20 @@ private:
     LikeCallback on_like_;
     PlaylistCallback on_select_playlist_;
     ftxui::Component component_;
+    ftxui::Component search_input_comp_;
     int scroll_offset_{0};
+
+    bool search_active_{false};
+    bool search_input_focused_{false};
+    std::string search_query_;
+    int search_cursor_pos_{0};
+
+    mutable std::vector<models::Track> filtered_tracks_;
+    mutable std::vector<models::Playlist> filtered_playlists_;
+    mutable std::vector<size_t> filtered_original_indices_;
+    mutable std::string last_cached_query_;
+    mutable models::ViewMode last_cached_view_{models::ViewMode::Search};
+    mutable uint64_t last_cached_playlist_id_{0};
 };
 
 } // namespace sctui::ui::views

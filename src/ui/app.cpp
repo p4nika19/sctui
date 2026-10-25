@@ -4,6 +4,7 @@
 #include "sctui/core/logger.hpp"
 #include "sctui/core/cover_art.hpp"
 #include "sctui/core/cookie_extractor.hpp"
+#include "sctui/audio/drm_daemon.hpp"
 #include <ftxui/component/event.hpp>
 #include <ftxui/screen/terminal.hpp>
 #include <iostream>
@@ -93,6 +94,8 @@ App::App(core::Config config)
 }
 
 App::~App() {
+    config_.volume = static_cast<int>(std::round(state_.volume_percent));
+    (void)config_.save();
     stop_worker_threads();
 }
 
@@ -154,6 +157,9 @@ core::Result<void> App::run() {
     // 5. Initial fetch of default trending / stream tracks or start onboarding
     if (config_.onboarding_completed) {
         submit_load_view(models::ViewMode::Stream);
+        if (config_.drm_engine_enabled) {
+            check_and_download_castlabs_electron(false);
+        }
     } else {
         state_.is_onboarding = true;
         state_.focused_panel = models::FocusPanel::Onboarding;
@@ -181,6 +187,8 @@ core::Result<void> App::run() {
 void App::request_exit() {
     is_running_ = false;
     core::CoverArtProcessor::clear_terminal_image(0);
+    config_.volume = static_cast<int>(std::round(state_.volume_percent));
+    (void)config_.save();
     screen_.Exit();
 }
 
@@ -266,6 +274,7 @@ void App::init_ui() {
         config_,
         cache_manager_,
         [this](const core::Config& new_cfg) {
+            bool drm_toggled_on = (!config_.drm_engine_enabled && new_cfg.drm_engine_enabled);
             config_ = new_cfg;
             (void)config_.save();
             apply_network_settings();
@@ -290,6 +299,9 @@ void App::init_ui() {
             state_.volume_percent = static_cast<float>(config_.volume);
             state_.icon_style = config_.icon_style;
             state_.notify("Settings saved and applied successfully!", false, 4);
+            if (config_.drm_engine_enabled) {
+                check_and_download_castlabs_electron(drm_toggled_on);
+            }
         },
         [this]() {
             trigger_auto_extract_cookies();
@@ -339,11 +351,23 @@ void App::init_ui() {
             state_.volume_percent = static_cast<float>(config_.volume);
             state_.icon_style = config_.icon_style;
 
+            if (!config_.auth_token.empty()) {
+                submit_load_account_profile();
+            }
             submit_load_view(models::ViewMode::Stream);
             state_.notify("Welcome to SCTUI! Setup completed.", false, 4);
         },
         [this]() {
             trigger_auto_extract_cookies();
+        },
+        [this](std::function<void(bool ok, const std::string& err)> done_cb) {
+            thread_pool_.enqueue([this, done_cb = std::move(done_cb)]() {
+                auto sat_dir = audio::DrmSatelliteDaemon::resolve_satellite_dir();
+                std::string err;
+                bool ok = audio::DrmSatelliteDaemon::download_castlabs_electron(sat_dir, &err);
+                done_cb(ok, err);
+                screen_.PostEvent(Event::Custom);
+            });
         }
     );
 
@@ -491,9 +515,26 @@ void App::init_ui() {
             return header_view_->get_component()->OnEvent(event);
         }
 
+        // Alt+/ toggles in-tab search for Likes and Playlists
+        bool is_alt_slash = (event == Event::Special("\x1b/") || event.input() == "\x1b/");
+        if (is_alt_slash) {
+            if (state_.current_view == models::ViewMode::Likes || state_.current_view == models::ViewMode::Playlists) {
+                state_.focused_panel = models::FocusPanel::TrackList;
+                if (track_list_view_) {
+                    track_list_view_->toggle_search();
+                }
+                return true;
+            }
+        }
+
         // If a text input box in Settings is focused, forward ALL events directly to settings view
         if (state_.focused_panel == models::FocusPanel::SettingsPanel && settings_view_ && settings_view_->is_editing_text()) {
             return settings_view_->get_component()->OnEvent(event);
+        }
+
+        // If TrackList in-tab search is active, forward events directly so characters aren't trapped by global shortcuts
+        if (state_.focused_panel == models::FocusPanel::TrackList && track_list_view_ && track_list_view_->is_searching()) {
+            return track_list_view_->get_component()->OnEvent(event);
         }
 
         // Global Help Modal toggle
@@ -945,6 +986,9 @@ void App::submit_load_view(models::ViewMode view) {
     }
 
     state_.current_view = view;
+    if (track_list_view_) {
+        track_list_view_->close_search();
+    }
     if (sidebar_view_) {
         sidebar_view_->set_selected_row(static_cast<int>(view));
     }
@@ -1342,15 +1386,33 @@ void App::submit_load_playlist(models::Playlist playlist) {
 void App::submit_play_track(models::Track track) {
     uint64_t current_gen = ++play_generation_;
 
-    if (track.is_drm_protected() && !state_.drm_engine_enabled) {
-        state_.notify("[DRM Protected] '" + core::truncate_string(track.title, 25) + "' is DRM-protected: skipping (enable DRM in settings)", true, 4);
-        LOG_WARN("App", "Track " + std::to_string(track.id) + " is DRM-protected: auto-skipping");
+    if (track.is_drm_protected()) {
+        if (!state_.drm_engine_enabled) {
+            state_.notify("[DRM Protected] '" + core::truncate_string(track.title, 25) + "' is DRM-protected: skipping (enable DRM in settings)", true, 4);
+            LOG_WARN("App", "Track " + std::to_string(track.id) + " is DRM-protected: auto-skipping");
+            play_next_track();
+            return;
+        }
+        if (state_.is_downloading_electron) {
+            state_.notify("[DRM Engine] Castlabs Electron is currently downloading, please wait...", true, 4);
+            return;
+        }
+        if (!audio::DrmSatelliteDaemon::is_castlabs_electron_installed()) {
+            check_and_download_castlabs_electron(true);
+            state_.notify("[DRM Engine] Castlabs Electron is missing. Initiating download...", true, 4);
+            return;
+        }
+    }
+
+    if ((track.is_go_plus() || track.is_snipped) && !state_.user_has_go_plus()) {
+        state_.notify("[SoundCloud Go+] '" + core::truncate_string(track.title, 25) + "' requires Go+ subscription: auto-skipping", true, 4);
+        LOG_INFO("App", "Track " + std::to_string(track.id) + " requires Go+ subscription: auto-skipping");
         play_next_track();
         return;
     }
 
     if (track.is_go_plus() || track.is_snipped) {
-        state_.notify("[SoundCloud Go+] Track requires Go+ (30s preview snippet)", false, 4);
+        state_.notify("[SoundCloud Go+] Track requires Go+ (playing with Go+ subscription)", false, 4);
     }
 
     state_.active_track = track;
@@ -1708,6 +1770,7 @@ void App::play_next_track() {
     }
 
     size_t skipped_drm = 0;
+    size_t skipped_goplus = 0;
     const size_t total_tracks = state_.queue.tracks.size();
     std::optional<models::Track> next_playable;
 
@@ -1722,18 +1785,27 @@ void App::play_next_track() {
             LOG_INFO("App", "Skipping DRM-protected track in queue: " + std::to_string(candidate->id) + " ('" + candidate->title + "')");
             continue;
         }
+        if ((candidate->is_go_plus() || candidate->is_snipped) && !state_.user_has_go_plus()) {
+            skipped_goplus++;
+            LOG_INFO("App", "Skipping Go+ track in queue (no Go+ subscription): " + std::to_string(candidate->id) + " ('" + candidate->title + "')");
+            continue;
+        }
         next_playable = candidate;
         break;
     }
 
     if (next_playable) {
-        if (skipped_drm > 0) {
+        if (skipped_drm > 0 && skipped_goplus > 0) {
+            state_.notify("Skipped " + std::to_string(skipped_drm) + " DRM and " + std::to_string(skipped_goplus) + " Go+ track(s)", true, 3);
+        } else if (skipped_drm > 0) {
             state_.notify("[DRM Protected] Skipped " + std::to_string(skipped_drm) + " DRM track(s)", true, 3);
+        } else if (skipped_goplus > 0) {
+            state_.notify("[SoundCloud Go+] Skipped " + std::to_string(skipped_goplus) + " Go+ track(s) (subscription required)", true, 3);
         }
         submit_play_track(*next_playable);
     } else {
-        if (skipped_drm > 0) {
-            state_.notify("[DRM Protected] Reached end of queue (all remaining tracks DRM-protected)", true, 4);
+        if (skipped_drm > 0 || skipped_goplus > 0) {
+            state_.notify("Reached end of queue (all remaining tracks DRM or Go+ protected)", true, 4);
         } else {
             state_.notify("Reached end of queue");
         }
@@ -1767,6 +1839,7 @@ void App::play_previous_track() {
     }
 
     size_t skipped_drm = 0;
+    size_t skipped_goplus = 0;
     const size_t total_tracks = state_.queue.tracks.size();
     std::optional<models::Track> prev_playable;
 
@@ -1781,13 +1854,22 @@ void App::play_previous_track() {
             LOG_INFO("App", "Skipping DRM-protected track backward in queue: " + std::to_string(candidate->id) + " ('" + candidate->title + "')");
             continue;
         }
+        if ((candidate->is_go_plus() || candidate->is_snipped) && !state_.user_has_go_plus()) {
+            skipped_goplus++;
+            LOG_INFO("App", "Skipping Go+ track backward in queue (no Go+ subscription): " + std::to_string(candidate->id) + " ('" + candidate->title + "')");
+            continue;
+        }
         prev_playable = candidate;
         break;
     }
 
     if (prev_playable) {
-        if (skipped_drm > 0) {
+        if (skipped_drm > 0 && skipped_goplus > 0) {
+            state_.notify("Skipped " + std::to_string(skipped_drm) + " DRM and " + std::to_string(skipped_goplus) + " Go+ track(s)", true, 3);
+        } else if (skipped_drm > 0) {
             state_.notify("[DRM Protected] Skipped " + std::to_string(skipped_drm) + " DRM track(s)", true, 3);
+        } else if (skipped_goplus > 0) {
+            state_.notify("[SoundCloud Go+] Skipped " + std::to_string(skipped_goplus) + " Go+ track(s) (subscription required)", true, 3);
         }
         submit_play_track(*prev_playable);
     } else {
@@ -1957,6 +2039,17 @@ void App::process_async_events() {
             case AsyncEventType::UserTracksReady:
                 state_.user_tracks = std::move(evt.tracks_payload);
                 state_.user_tracks_selected_index = 0;
+                break;
+            case AsyncEventType::ElectronDownloadStarted:
+                state_.is_downloading_electron = true;
+                break;
+            case AsyncEventType::ElectronDownloadFinished:
+                state_.is_downloading_electron = false;
+                state_.notify("[DRM Engine] Castlabs Electron installed successfully!", false, 5);
+                break;
+            case AsyncEventType::ElectronDownloadFailed:
+                state_.is_downloading_electron = false;
+                state_.notify("[DRM Engine] " + (evt.text_payload.empty() ? "Failed to download Castlabs Electron" : evt.text_payload), true, 6);
                 break;
         }
     }
@@ -2392,12 +2485,19 @@ Element App::render_fullscreen_playback() {
     std::vector<int> col_levels(static_cast<size_t>(w), 0);
     for (int x = 0; x < w; ++x) {
         float norm_x = 0.0f;
-        if (config_.fullscreen_visualizer_mirrored) {
+        if (config_.fullscreen_visualizer_style == core::FullscreenVisualizerStyle::LowFreqCentered) {
             float mid = (w - 1) / 2.0f;
             if (mid > 0.0f) {
-                // Symmetrical from center (bass) extending outward to edges
+                // Symmetrical from center (bass/low freq) extending outward to edges (treble/high freq)
                 float dist_from_center = std::abs(static_cast<float>(x) - mid) / mid;
                 norm_x = std::clamp(dist_from_center, 0.0f, 1.0f);
+            }
+        } else if (config_.fullscreen_visualizer_style == core::FullscreenVisualizerStyle::HighFreqCentered) {
+            float mid = (w - 1) / 2.0f;
+            if (mid > 0.0f) {
+                // Symmetrical from center (treble/high freq) extending outward to edges (bass/low freq)
+                float dist_from_center = std::abs(static_cast<float>(x) - mid) / mid;
+                norm_x = 1.0f - std::clamp(dist_from_center, 0.0f, 1.0f);
             }
         } else {
             norm_x = (w > 1) ? (static_cast<float>(x) / static_cast<float>(w - 1)) : 0.0f;
@@ -2492,7 +2592,9 @@ Element App::render_fullscreen_playback() {
     } else {
         shuf_label = state_.queue.shuffle ? ("[ " + sym.shuffle + " Shuf ]") : ("[ " + sym.shuffle + " Shuf ]");
     }
-    Element shuf_btn = text(shuf_label) | color(state_.queue.shuffle ? accent : Color::GrayLight);
+    Element shuf_btn = text(shuf_label)
+        | color(state_.queue.shuffle ? accent : Color::GrayLight)
+        | (state_.queue.shuffle ? bold : nothing);
 
     std::string rep_label;
     if (compact_ctrls) {
@@ -2627,6 +2729,49 @@ void App::queue_selected_track(bool play_next) {
     if (track_list_view_) {
         track_list_view_->queue_selected(play_next);
     }
+}
+
+void App::check_and_download_castlabs_electron(bool user_initiated) {
+    if (!state_.drm_engine_enabled) {
+        return;
+    }
+    if (state_.is_downloading_electron) {
+        if (user_initiated) {
+            state_.notify("[DRM Engine] Castlabs Electron is currently downloading, please wait...", false, 4);
+        }
+        return;
+    }
+
+    auto sat_dir = audio::DrmSatelliteDaemon::resolve_satellite_dir();
+    if (audio::DrmSatelliteDaemon::is_castlabs_electron_installed(sat_dir)) {
+        LOG_INFO("App", "Castlabs Electron is present and up to date at " + sat_dir.string());
+        if (user_initiated) {
+            state_.notify("[DRM Engine] Castlabs Electron (v44.9.3+wvcus) is already installed.", false, 4);
+        }
+        return;
+    }
+
+    LOG_INFO("App", "Castlabs Electron required version is missing. Initiating automatic download in " + sat_dir.string());
+    state_.is_downloading_electron = true;
+    state_.notify("[DRM Engine] Downloading Castlabs Electron (v44.9.3+wvcus)...", false, 6);
+
+    thread_pool_.enqueue([this, sat_dir]() {
+        if (!is_running_) return;
+        std::string err;
+        bool ok = audio::DrmSatelliteDaemon::download_castlabs_electron(sat_dir, &err);
+        if (!is_running_) return;
+        if (ok) {
+            ui_event_channel_.push(AsyncUIEvent{
+                .type = AsyncEventType::ElectronDownloadFinished
+            });
+        } else {
+            ui_event_channel_.push(AsyncUIEvent{
+                .type = AsyncEventType::ElectronDownloadFailed,
+                .text_payload = err
+            });
+        }
+        screen_.PostEvent(Event::Custom);
+    });
 }
 
 } // namespace sctui::ui
