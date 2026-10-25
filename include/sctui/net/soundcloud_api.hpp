@@ -83,14 +83,14 @@ public:
     // Toggle track like
     core::Result<bool> toggle_like_track(uint64_t track_id, bool current_liked_state);
 
+    core::Result<std::vector<models::Track>> parse_tracks_json(const std::string& json_str);
+    core::Result<std::vector<models::Playlist>> parse_playlists_json(const std::string& json_str);
+
 private:
     std::string client_id_;
     std::string auth_token_;
     uint64_t user_id_{0};
     HttpClient http_;
-
-    core::Result<std::vector<models::Track>> parse_tracks_json(const std::string& json_str);
-    core::Result<std::vector<models::Playlist>> parse_playlists_json(const std::string& json_str);
 };
 
 } // namespace sctui::net

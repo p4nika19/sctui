@@ -4,6 +4,7 @@
 #include <iostream>
 #include <thread>
 #include <chrono>
+#include <unordered_set>
 #include <nlohmann/json.hpp>
 
 namespace sctui::net {
@@ -537,7 +538,10 @@ core::Result<std::vector<models::Playlist>> SoundCloudApi::get_user_playlists(
         return core::MakeError(uid_res.error().code, uid_res.error().message);
     }
 
-    std::string url = std::string(ApiBase) + "/users/" + std::to_string(*uid_res) + "/playlists";
+    if (client_id_.empty()) {
+        (void)resolve_client_id();
+    }
+
     std::unordered_map<std::string, std::string> params = {
         {"limit", std::to_string(limit)},
         {"offset", std::to_string(offset)}
@@ -546,13 +550,45 @@ core::Result<std::vector<models::Playlist>> SoundCloudApi::get_user_playlists(
         params["client_id"] = client_id_;
     }
 
-    auto resp = http_.get(url, {}, params);
-    if (!resp) {
-        LOG_ERROR("SoundCloudApi", "Failed to fetch playlists HTTP " + std::to_string(resp.error().http_status) + ": " + resp.error().message);
-        return core::MakeError(resp.error().code, resp.error().message, resp.error().http_status);
+    std::vector<models::Playlist> playlists;
+    std::unordered_set<uint64_t> seen_ids;
+
+    // 1. Fetch authored playlists
+    std::string authored_url = std::string(ApiBase) + "/users/" + std::to_string(*uid_res) + "/playlists";
+    auto resp = http_.get(authored_url, {}, params);
+    if (resp && resp->is_2xx()) {
+        auto parsed = parse_playlists_json(resp->body);
+        if (parsed) {
+            for (auto& pl : *parsed) {
+                if (seen_ids.insert(pl.id).second) {
+                    playlists.push_back(std::move(pl));
+                }
+            }
+        }
     }
 
-    return parse_playlists_json(resp->body);
+    // 2. Fetch liked/favorited playlists from library
+    std::string likes_url = std::string(ApiBase) + "/users/" + std::to_string(*uid_res) + "/playlist_likes";
+    auto likes_resp = http_.get(likes_url, {}, params);
+    if (likes_resp && likes_resp->is_2xx()) {
+        auto parsed_likes = parse_playlists_json(likes_resp->body);
+        if (parsed_likes) {
+            for (auto& pl : *parsed_likes) {
+                if (seen_ids.insert(pl.id).second) {
+                    playlists.push_back(std::move(pl));
+                }
+            }
+        }
+    }
+
+    if (playlists.empty() && (!resp || !resp->is_2xx()) && (!likes_resp || !likes_resp->is_2xx())) {
+        std::string err = resp ? "HTTP " + std::to_string(resp->status_code) : resp.error().message;
+        LOG_ERROR("SoundCloudApi", "Failed to fetch playlists: " + err);
+        return core::MakeError(core::ErrorCode::NetworkError, err);
+    }
+
+    LOG_INFO("SoundCloudApi", "Fetched " + std::to_string(playlists.size()) + " user playlists (authored + liked)");
+    return playlists;
 }
 
 core::Result<std::vector<models::Track>> SoundCloudApi::get_playlist_tracks(uint64_t playlist_id) {
@@ -1014,22 +1050,29 @@ core::Result<std::vector<models::Playlist>> SoundCloudApi::parse_playlists_json(
 
         if (!collection) return playlists;
 
-        for (const auto& item : *collection) {
+        for (const auto& raw_item : *collection) {
+            const nlohmann::json* item = &raw_item;
+            if (raw_item.contains("playlist") && raw_item["playlist"].is_object()) {
+                item = &raw_item["playlist"];
+            }
+
             models::Playlist pl;
-            if (item.contains("id") && item["id"].is_number()) {
-                pl.id = item["id"].get<uint64_t>();
+            if (item->contains("id") && (*item)["id"].is_number()) {
+                pl.id = (*item)["id"].get<uint64_t>();
             }
-            if (item.contains("title") && item["title"].is_string()) {
-                pl.title = item["title"].get<std::string>();
+            if (item->contains("title") && (*item)["title"].is_string()) {
+                pl.title = (*item)["title"].get<std::string>();
             }
-            if (item.contains("track_count") && item["track_count"].is_number()) {
-                pl.track_count = item["track_count"].get<size_t>();
+            if (item->contains("track_count") && (*item)["track_count"].is_number()) {
+                pl.track_count = (*item)["track_count"].get<size_t>();
             }
-            if (item.contains("duration") && item["duration"].is_number()) {
-                pl.duration_ms = item["duration"].get<uint64_t>();
+            if (item->contains("duration") && (*item)["duration"].is_number()) {
+                pl.duration_ms = (*item)["duration"].get<uint64_t>();
             }
-            if (item.contains("likes_count") && item["likes_count"].is_number()) {
-                pl.likes_count = item["likes_count"].get<uint64_t>();
+            if (item->contains("likes_count") && (*item)["likes_count"].is_number()) {
+                pl.likes_count = (*item)["likes_count"].get<uint64_t>();
+            } else if (item->contains("favoritings_count") && (*item)["favoritings_count"].is_number()) {
+                pl.likes_count = (*item)["favoritings_count"].get<uint64_t>();
             }
             playlists.push_back(std::move(pl));
         }

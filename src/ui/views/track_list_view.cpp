@@ -11,22 +11,22 @@ namespace {
 
 Element render_like_badge(bool is_liked, core::IconStyle icon_style) {
     if (!is_liked) {
-        return text("   ") | size(WIDTH, EQUAL, 3);
+        return text("    ") | size(WIDTH, EQUAL, 4);
     }
     const auto& sym = ThemeSymbols::get(icon_style);
     std::string badge_str;
     switch (icon_style) {
         case core::IconStyle::Emoji:
-            badge_str = " " + sym.likes;
+            badge_str = sym.likes + "  ";
             break;
         case core::IconStyle::Unicode:
-            badge_str = " " + sym.likes + " ";
+            badge_str = " " + sym.likes + "  ";
             break;
         case core::IconStyle::DefaultAscii:
-            badge_str = sym.likes;
+            badge_str = sym.likes + "  ";
             break;
     }
-    return text(badge_str) | color(Color::RGB(255, 65, 105)) | bold | size(WIDTH, EQUAL, 3);
+    return text(badge_str) | color(Color::RGB(255, 65, 105)) | bold | size(WIDTH, EQUAL, 4);
 }
 
 } // namespace
@@ -284,9 +284,7 @@ Element TrackListView::render(bool is_focused) {
         if (!state_.is_compact()) {
             header_cols.push_back(text("TRACKS") | color(Color::GrayLight) | bold | size(WIDTH, EQUAL, 14));
             header_cols.push_back(text("TIME") | color(Color::GrayLight) | bold | size(WIDTH, EQUAL, 10));
-            if (state_.is_ultrawide()) {
-                header_cols.push_back(text("LIKES") | color(Color::GrayLight) | bold | size(WIDTH, EQUAL, 12));
-            }
+            header_cols.push_back(text("LIKES") | color(Color::GrayLight) | bold | size(WIDTH, EQUAL, 12));
         }
         rows.push_back(hbox(std::move(header_cols)));
         rows.push_back(separatorLight());
@@ -317,13 +315,11 @@ Element TrackListView::render(bool is_focused) {
                 while (dw < 10) { dur_str.push_back(' '); dw++; }
                 cols.push_back(text(dur_str) | color(Color::GrayLight) | size(WIDTH, EQUAL, 10));
 
-                if (state_.is_ultrawide()) {
-                    const auto& sym = ThemeSymbols::get(state_.icon_style);
-                    std::string likes_str = sym.likes + " " + std::to_string(pl.likes_count);
-                    int lw = ftxui::string_width(likes_str);
-                    while (lw < 12) { likes_str.push_back(' '); lw++; }
-                    cols.push_back(text(likes_str) | color(Color::GrayDark) | size(WIDTH, EQUAL, 12));
-                }
+                const auto& sym = ThemeSymbols::get(state_.icon_style);
+                std::string likes_str = sym.likes + " " + std::to_string(pl.likes_count);
+                int lw = ftxui::string_width(likes_str);
+                while (lw < 12) { likes_str.push_back(' '); lw++; }
+                cols.push_back(text(likes_str) | color(Color::GrayDark) | size(WIDTH, EQUAL, 12));
             }
 
             auto row_elem = hbox(std::move(cols));
@@ -415,7 +411,7 @@ Element TrackListView::render(bool is_focused) {
     header_cols.push_back(text("  #  ") | color(Color::GrayDark) | bold | size(WIDTH, EQUAL, 5));
     header_cols.push_back(text("TITLE") | color(Color::GrayLight) | bold | xflex);
     if (show_like_col) {
-        header_cols.push_back(text("   ") | size(WIDTH, EQUAL, 3));
+        header_cols.push_back(text("    ") | size(WIDTH, EQUAL, 4));
     }
     if (!state_.is_compact()) {
         header_cols.push_back(text("ARTIST") | color(Color::GrayLight) | bold | size(WIDTH, EQUAL, 24));
@@ -428,9 +424,9 @@ Element TrackListView::render(bool is_focused) {
     rows.push_back(separatorLight());
 
     int sidebar_w = state_.is_compact() ? 8 : 22;
-    int fixed_cols = 5 + 24 + 8 + (state_.is_ultrawide() ? 52 : 0) + (show_like_col ? 3 : 0);
+    int fixed_cols = 5 + 24 + 8 + (state_.is_ultrawide() ? 52 : 0) + (show_like_col ? 4 : 0);
     int avail_row_w = std::max(20, state_.terminal_width - sidebar_w - 6);
-    int max_title_w = state_.is_compact() ? std::max(12, avail_row_w - 7 - (show_like_col ? 3 : 0)) : std::max(12, avail_row_w - fixed_cols);
+    int max_title_w = state_.is_compact() ? std::max(12, avail_row_w - 7 - (show_like_col ? 4 : 0)) : std::max(12, avail_row_w - fixed_cols);
 
     for (int i = start_idx; i < end_idx; ++i) {
         const auto& track = tracks[static_cast<size_t>(i)];

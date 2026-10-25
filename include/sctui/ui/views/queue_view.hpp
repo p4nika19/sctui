@@ -34,6 +34,7 @@ private:
     int selected_index_{0};
     int scroll_offset_{0};
     uint64_t last_active_track_id_{0};
+    bool last_shuffle_state_{false};
 };
 
 } // namespace sctui::ui::views

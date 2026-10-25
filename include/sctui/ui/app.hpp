@@ -138,6 +138,7 @@ private:
     core::ThreadPool thread_pool_{6};
     std::atomic<uint64_t> likes_fetch_generation_{0};
     std::atomic<uint64_t> play_generation_{0};
+    std::atomic<bool> is_track_loading_{false};
     std::jthread worker_thread_;
     std::jthread telemetry_thread_;
     std::string last_search_query_;

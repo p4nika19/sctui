@@ -240,15 +240,26 @@ Element QueueView::render(bool is_focused) {
         state_.queue.rebuild_shuffle();
     }
 
+    bool shuffle_changed = (is_shuffled != last_shuffle_state_);
+    if (shuffle_changed) {
+        last_shuffle_state_ = is_shuffled;
+    }
+
+    int viewport_height = std::max(3, state_.terminal_height - 18);
+
     // Automatically follow playing track in selection and viewport scrolling
     uint64_t active_track_id = state_.active_track ? state_.active_track->id : 0;
-    if (active_track_id != 0 && active_track_id != last_active_track_id_) {
+    if ((active_track_id != 0 && active_track_id != last_active_track_id_) || shuffle_changed) {
         last_active_track_id_ = active_track_id;
         int cur_idx = is_shuffled
             ? static_cast<int>(state_.queue.shuffle_cursor)
             : state_.queue.current_index;
         if (cur_idx >= 0 && cur_idx < static_cast<int>(state_.queue.tracks.size())) {
             selected_index_ = cur_idx;
+            if (cur_idx < scroll_offset_ || cur_idx >= scroll_offset_ + viewport_height) {
+                scroll_offset_ = std::clamp(cur_idx - viewport_height / 3, 0,
+                    std::max(0, static_cast<int>(state_.queue.tracks.size()) - viewport_height));
+            }
         }
     }
 
@@ -259,7 +270,6 @@ Element QueueView::render(bool is_focused) {
 
     std::string count_str = std::to_string(state_.queue.tracks.size()) + " tracks • " + core::format_duration_ms(total_queue_ms);
 
-    int viewport_height = std::max(3, state_.terminal_height - 18);
     int selected_idx = std::clamp(selected_index_, 0, static_cast<int>(state_.queue.tracks.size() - 1));
     if (selected_idx < scroll_offset_) {
         scroll_offset_ = selected_idx;

@@ -154,6 +154,19 @@ core::Result<void> App::run() {
     // 5. Initial fetch of default trending / stream tracks or start onboarding
     if (config_.onboarding_completed) {
         submit_load_view(models::ViewMode::Stream);
+        if (!config_.auth_token.empty()) {
+            thread_pool_.enqueue([this]() {
+                if (!is_running_) return;
+                auto page_res = api_.get_user_likes_page(200, "");
+                if (page_res && is_running_ && !page_res->tracks.empty()) {
+                    ui_event_channel_.push(AsyncUIEvent{
+                        .type = AsyncEventType::LikesTracksReady,
+                        .tracks_payload = std::move(page_res->tracks)
+                    });
+                    screen_.PostEvent(Event::Custom);
+                }
+            });
+        }
     } else {
         state_.is_onboarding = true;
         state_.focused_panel = models::FocusPanel::Onboarding;
@@ -714,6 +727,30 @@ void App::init_ui() {
             case models::FocusPanel::SettingsPanel:
                 return settings_view_->get_component()->OnEvent(event);
             case models::FocusPanel::Player:
+                if (event == Event::ArrowUp || event == Event::Character('k')) {
+                    if (state_.current_view == models::ViewMode::Settings) {
+                        state_.focused_panel = models::FocusPanel::SettingsPanel;
+                        settings_view_->get_component()->TakeFocus();
+                    } else if (state_.current_view == models::ViewMode::Account) {
+                        state_.focused_panel = models::FocusPanel::AccountPanel;
+                        account_view_->get_component()->TakeFocus();
+                    } else if (state_.current_view == models::ViewMode::Queue) {
+                        state_.focused_panel = models::FocusPanel::QueueList;
+                        queue_view_->get_component()->TakeFocus();
+                    } else {
+                        state_.focused_panel = models::FocusPanel::TrackList;
+                        track_list_view_->get_component()->TakeFocus();
+                    }
+                    return true;
+                }
+                if (event == Event::Escape) {
+                    state_.focused_panel = models::FocusPanel::Sidebar;
+                    sidebar_view_->get_component()->TakeFocus();
+                    return true;
+                }
+                if (event == Event::ArrowDown || event == Event::Character('j')) {
+                    return true;
+                }
                 if (event == Event::Character('h') || event == Event::ArrowLeft) {
                     audio_.seek_relative(-5000);
                     return true;
@@ -736,6 +773,7 @@ void App::cycle_focus(bool reverse) {
         switch (state_.focused_panel) {
             case models::FocusPanel::SearchInput:
                 state_.focused_panel = models::FocusPanel::Player;
+                player_view_->get_component()->TakeFocus();
                 break;
             case models::FocusPanel::Sidebar:
                 state_.focused_panel = models::FocusPanel::SearchInput;
@@ -746,16 +784,21 @@ void App::cycle_focus(bool reverse) {
             case models::FocusPanel::AccountPanel:
             case models::FocusPanel::SettingsPanel:
                 state_.focused_panel = models::FocusPanel::Sidebar;
+                sidebar_view_->get_component()->TakeFocus();
                 break;
             case models::FocusPanel::Player:
                 if (state_.current_view == models::ViewMode::Settings) {
                     state_.focused_panel = models::FocusPanel::SettingsPanel;
+                    settings_view_->get_component()->TakeFocus();
                 } else if (state_.current_view == models::ViewMode::Account) {
                     state_.focused_panel = models::FocusPanel::AccountPanel;
+                    account_view_->get_component()->TakeFocus();
                 } else if (state_.current_view == models::ViewMode::Queue) {
                     state_.focused_panel = models::FocusPanel::QueueList;
+                    queue_view_->get_component()->TakeFocus();
                 } else {
                     state_.focused_panel = models::FocusPanel::TrackList;
+                    track_list_view_->get_component()->TakeFocus();
                 }
                 break;
             case models::FocusPanel::HelpModal:
@@ -766,16 +809,21 @@ void App::cycle_focus(bool reverse) {
         switch (state_.focused_panel) {
             case models::FocusPanel::SearchInput:
                 state_.focused_panel = models::FocusPanel::Sidebar;
+                sidebar_view_->get_component()->TakeFocus();
                 break;
             case models::FocusPanel::Sidebar:
                 if (state_.current_view == models::ViewMode::Settings) {
                     state_.focused_panel = models::FocusPanel::SettingsPanel;
+                    settings_view_->get_component()->TakeFocus();
                 } else if (state_.current_view == models::ViewMode::Account) {
                     state_.focused_panel = models::FocusPanel::AccountPanel;
+                    account_view_->get_component()->TakeFocus();
                 } else if (state_.current_view == models::ViewMode::Queue) {
                     state_.focused_panel = models::FocusPanel::QueueList;
+                    queue_view_->get_component()->TakeFocus();
                 } else {
                     state_.focused_panel = models::FocusPanel::TrackList;
+                    track_list_view_->get_component()->TakeFocus();
                 }
                 break;
             case models::FocusPanel::TrackList:
@@ -783,6 +831,7 @@ void App::cycle_focus(bool reverse) {
             case models::FocusPanel::AccountPanel:
             case models::FocusPanel::SettingsPanel:
                 state_.focused_panel = models::FocusPanel::Player;
+                player_view_->get_component()->TakeFocus();
                 break;
             case models::FocusPanel::Player:
                 state_.focused_panel = models::FocusPanel::SearchInput;
@@ -825,7 +874,19 @@ void App::stop_worker_threads() {
 }
 
 void App::update_telemetry() {
-    state_.playback_state = audio_.get_state();
+    auto cur_audio_state = audio_.get_state();
+    if (is_track_loading_.load()) {
+        if (cur_audio_state == audio::PlaybackState::Playing ||
+            cur_audio_state == audio::PlaybackState::Buffering ||
+            cur_audio_state == audio::PlaybackState::Error) {
+            is_track_loading_.store(false);
+            state_.playback_state = cur_audio_state;
+        } else {
+            state_.playback_state = audio::PlaybackState::Loading;
+        }
+    } else {
+        state_.playback_state = cur_audio_state;
+    }
     state_.position_ms = audio_.get_position_ms();
     state_.duration_ms = audio_.get_duration_ms();
     state_.buffer_percent = audio_.get_buffer_percent();
@@ -1307,6 +1368,8 @@ void App::submit_play_track(models::Track track) {
 
     state_.active_track = track;
     state_.is_loading = true;
+    is_track_loading_.store(true);
+    state_.playback_state = audio::PlaybackState::Loading;
     if (mpris_server_) {
         models::Track mpris_trk = track;
         mpris_trk.artwork_url = core::CoverArtProcessor::upgrade_artwork_url(track.artwork_url);
@@ -1405,6 +1468,8 @@ void App::submit_play_track(models::Track track) {
             });
         } else {
             if (play_generation_.load() == current_gen) {
+                is_track_loading_.store(false);
+                state_.playback_state = audio::PlaybackState::Error;
                 LOG_ERROR("App", "Stream resolution failed for track " + std::to_string(track.id) + " ('" + track.title + "'): " + res.error().message);
                 ui_event_channel_.push(AsyncUIEvent{
                     .type = AsyncEventType::ErrorMessage,
@@ -1893,6 +1958,7 @@ void App::process_async_events() {
                 break;
             case AsyncEventType::MprisStop:
                 audio_.stop();
+                is_track_loading_.store(false);
                 break;
             case AsyncEventType::UserProfileReady:
                 state_.user_profile = std::move(evt.profile_payload);

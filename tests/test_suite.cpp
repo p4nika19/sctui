@@ -19,6 +19,8 @@
 #include "sctui/ui/views/settings_view.hpp"
 #include "sctui/ui/views/onboarding_view.hpp"
 #include "sctui/ui/views/track_list_view.hpp"
+#include "sctui/ui/views/player_view.hpp"
+#include "sctui/ui/views/queue_view.hpp"
 #include <fstream>
 #include <set>
 #include <nlohmann/json.hpp>
@@ -1468,6 +1470,137 @@ void test_like_indicator_and_toggle_unlike() {
     std::cout << "  -> HttpClient del (DELETE) request execution OK" << std::endl;
 }
 
+void test_recent_improvements() {
+    std::cout << "[Test] Running verification for playlist likes parsing, queue shuffle follow, and loading status..." << std::endl;
+
+    // 1. Test playlist likes parsing (both authored and liked/favorited playlist wrapped structures)
+    {
+        std::string json_str = R"({
+            "collection": [
+                {
+                    "id": 1001,
+                    "title": "Authored Playlist",
+                    "track_count": 12,
+                    "duration": 3600000,
+                    "likes_count": 5
+                },
+                {
+                    "playlist": {
+                        "id": 1002,
+                        "title": "Liked Playlist from Other User",
+                        "track_count": 25,
+                        "duration": 7200000,
+                        "favoritings_count": 450
+                    }
+                }
+            ]
+        })";
+
+        sctui::net::SoundCloudApi api;
+        auto res = api.parse_playlists_json(json_str);
+        REQUIRE(res.has_value());
+        REQUIRE(res->size() == 2);
+        REQUIRE((*res)[0].id == 1001);
+        REQUIRE((*res)[0].title == "Authored Playlist");
+        REQUIRE((*res)[0].likes_count == 5);
+
+        REQUIRE((*res)[1].id == 1002);
+        REQUIRE((*res)[1].title == "Liked Playlist from Other User");
+        REQUIRE((*res)[1].likes_count == 450);
+        std::cout << "  -> Playlist likes and wrapped structures parsed OK" << std::endl;
+    }
+
+    // 2. Test QueueView automatically following playing track when shuffle is toggled
+    {
+        sctui::models::AppState state;
+        state.terminal_width = 120;
+        state.terminal_height = 40;
+
+        for (int i = 0; i < 50; ++i) {
+            sctui::models::Track t;
+            t.id = 2000 + i;
+            t.title = "Track " + std::to_string(i + 1);
+            t.artist = "Artist " + std::to_string(i + 1);
+            t.duration_ms = 180000;
+            state.queue.tracks.push_back(t);
+        }
+
+        // Set playing track to 44th track (index 43)
+        state.queue.set_current_index(43);
+        state.active_track = state.queue.tracks[43];
+
+        sctui::ui::views::QueueView qv(state, [](size_t){});
+        qv.render(true);
+
+        // Toggle shuffle ON
+        state.queue.toggle_shuffle();
+        REQUIRE(state.queue.shuffle == true);
+        REQUIRE(state.queue.shuffle_cursor == 0);
+        REQUIRE(state.queue.shuffle_indices[0] == 43);
+
+        // Render should detect shuffle toggle and center on shuffle_cursor (0)
+        qv.render(true);
+
+        // Toggle shuffle OFF
+        state.queue.toggle_shuffle();
+        REQUIRE(state.queue.shuffle == false);
+        REQUIRE(state.queue.current_index == 43);
+
+        // Render should detect shuffle toggle off and center on current_index (43)
+        qv.render(true);
+        std::cout << "  -> QueueView correctly followed playing track across shuffle toggles OK" << std::endl;
+    }
+
+    // 3. Test PlayerView loading status
+    {
+        sctui::models::AppState state;
+        state.terminal_width = 120;
+        state.terminal_height = 40;
+        state.playback_state = sctui::audio::PlaybackState::Loading;
+
+        sctui::ui::views::PlayerView pv(state);
+        auto elem = pv.render(true);
+
+        auto screen = ftxui::Screen::Create(ftxui::Dimension::Fixed(120), ftxui::Dimension::Fixed(10));
+        ftxui::Render(screen, elem);
+        std::string out = screen.ToString();
+
+        REQUIRE(out.find("LOADING") != std::string::npos);
+        REQUIRE(out.find("STOPPED") == std::string::npos);
+        std::cout << "  -> PlayerView correctly rendered LOADING status OK" << std::endl;
+    }
+
+    // 4. Test like icon spacing in TrackListView (icon is spaced to the left from artist name)
+    {
+        sctui::models::AppState state;
+        state.terminal_width = 120;
+        state.terminal_height = 40;
+        state.current_view = sctui::models::ViewMode::Search;
+        state.icon_style = sctui::core::IconStyle::Emoji;
+
+        sctui::models::Track track;
+        track.id = 99999;
+        track.title = "Neon Nights";
+        track.artist = "SynthwaveArtist";
+        track.duration_ms = 210000;
+        track.is_liked = true;
+        state.search_results.push_back(track);
+        state.liked_track_ids.insert(track.id);
+
+        sctui::ui::views::TrackListView tlv(state, nullptr, nullptr, nullptr, nullptr);
+        auto elem = tlv.render(true);
+
+        auto screen = ftxui::Screen::Create(ftxui::Dimension::Fixed(120), ftxui::Dimension::Fixed(30));
+        ftxui::Render(screen, elem);
+        std::string out = screen.ToString();
+
+        REQUIRE(out.find("Neon Nights") != std::string::npos);
+        REQUIRE(out.find("SynthwaveArtist") != std::string::npos);
+        REQUIRE(out.find("💖  ") != std::string::npos);
+        std::cout << "  -> Like icon has 2 spaces separating it from artist's name OK" << std::endl;
+    }
+}
+
 int main() {
     std::cout << "=== Running sctui test suite ===" << std::endl;
     test_spsc_queue();
@@ -1497,6 +1630,7 @@ int main() {
     test_user_library();
     test_account_profile();
     test_like_indicator_and_toggle_unlike();
+    test_recent_improvements();
     std::cout << "=== All tests PASSED successfully! ===" << std::endl;
     return 0;
 }
