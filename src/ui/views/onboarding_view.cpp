@@ -700,7 +700,7 @@ Element OnboardingView::render_step2_appearance() {
             text("[ Artwork ]") | color(Color::GrayDark) | center,
             text("[ Disabled ]") | color(Color::GrayDark) | center,
             filler()
-        }) | size(WIDTH, EQUAL, 18) | size(HEIGHT, EQUAL, 9) | border | color(Color::GrayDark);
+        }) | size(WIDTH, EQUAL, 18) | size(HEIGHT, EQUAL, 8) | border | color(Color::GrayDark);
     } else if (image_protocol_idx_ == 3) { // Half-block pixelated
         if (preview_drawn_in_terminal_) {
             core::CoverArtProcessor::clear_terminal_image(888);
@@ -712,10 +712,10 @@ Element OnboardingView::render_step2_appearance() {
                 core::ImageProtocol::HalfBlock,
                 888,
                 18,
-                9
+                8
             );
         } else {
-            cover_preview_element = core::CoverArtProcessor::render_placeholder(18, 9, state_.accent_color);
+            cover_preview_element = core::CoverArtProcessor::render_placeholder(18, 8, state_.accent_color);
         }
     } else if (preview_image_) {
         preview_drawn_in_terminal_ = true;
@@ -724,10 +724,10 @@ Element OnboardingView::render_step2_appearance() {
             effective_proto,
             888, // dedicated preview image id
             18,
-            9
+            8
         );
     } else {
-        cover_preview_element = core::CoverArtProcessor::render_placeholder(18, 9, state_.accent_color);
+        cover_preview_element = core::CoverArtProcessor::render_placeholder(18, 8, state_.accent_color);
     }
 
     std::vector<std::string> proto_desc_lines;

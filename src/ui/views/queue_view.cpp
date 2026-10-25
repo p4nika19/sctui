@@ -159,8 +159,15 @@ void QueueView::remove_selected() {
             for (auto& idx : state_.queue.shuffle_indices) {
                 if (idx > real_index) idx--;
             }
-            if (state_.queue.shuffle_cursor >= state_.queue.shuffle_indices.size() && !state_.queue.shuffle_indices.empty()) {
+            if (static_cast<size_t>(selected_index_) < state_.queue.shuffle_cursor) {
+                state_.queue.shuffle_cursor--;
+            } else if (state_.queue.shuffle_cursor >= state_.queue.shuffle_indices.size() && !state_.queue.shuffle_indices.empty()) {
                 state_.queue.shuffle_cursor = state_.queue.shuffle_indices.size() - 1;
+            }
+            if (!state_.queue.shuffle_indices.empty()) {
+                state_.queue.current_index = static_cast<int>(state_.queue.shuffle_indices[state_.queue.shuffle_cursor]);
+            } else {
+                state_.queue.current_index = -1;
             }
         } else {
             state_.queue.tracks.erase(state_.queue.tracks.begin() + selected_index_);

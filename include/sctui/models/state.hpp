@@ -202,6 +202,9 @@ struct QueueState {
                 rebuild_shuffle();
             }
             if (index >= 0 && static_cast<size_t>(index) < tracks.size()) {
+                if (shuffle_cursor < shuffle_indices.size() && shuffle_indices[shuffle_cursor] == static_cast<size_t>(index)) {
+                    return;
+                }
                 auto it = std::find(shuffle_indices.begin(), shuffle_indices.end(), static_cast<size_t>(index));
                 if (it != shuffle_indices.end()) {
                     shuffle_cursor = static_cast<size_t>(std::distance(shuffle_indices.begin(), it));

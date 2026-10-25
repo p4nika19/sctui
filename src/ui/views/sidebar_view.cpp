@@ -174,21 +174,21 @@ Element SidebarView::render(bool is_focused) {
     sidebar_elements.push_back(separator());
     sidebar_elements.push_back(sidebar_box);
 
-    if (!state_.is_compact() && state_.terminal_height >= 29) {
+    if (!state_.is_compact() && state_.terminal_height >= 28) {
         sidebar_elements.push_back(filler());
         sidebar_elements.push_back(separatorLight());
 
         Element cover_elem;
         if (state_.current_cover_art.has_value()) {
-            cover_elem = core::CoverArtProcessor::render_cover_element(*state_.current_cover_art, config_.image_protocol);
+            cover_elem = core::CoverArtProcessor::render_cover_element(*state_.current_cover_art, config_.image_protocol, 1, 18, 8);
         } else {
-            cover_elem = core::CoverArtProcessor::render_placeholder(18, 9, state_.accent_color);
+            cover_elem = core::CoverArtProcessor::render_placeholder(18, 8, state_.accent_color);
         }
 
         sidebar_elements.push_back(text(" NOW PLAYING ") | color(accent) | bold | center);
         sidebar_elements.push_back(cover_elem | center);
 
-        if (state_.terminal_height >= 32) {
+        if (state_.terminal_height >= 31) {
             std::string title_sub = state_.active_track
                 ? core::truncate_display_width(state_.active_track->title, 18)
                 : "No track playing";

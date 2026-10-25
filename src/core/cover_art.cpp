@@ -416,7 +416,7 @@ ftxui::Element CoverArtProcessor::render_cover_element(
     using namespace ftxui;
     if (target_w <= 0 || target_h <= 0) {
         target_w = 18;
-        target_h = 9;
+        target_h = 8;
     }
 
     if (image.pixels.empty() || image.width <= 0 || image.height <= 0) {
@@ -539,7 +539,19 @@ ftxui::Element CoverArtProcessor::render_placeholder(int width, int height, cons
     auto accent_c = Color::RGB(accent.r, accent.g, accent.b);
     auto dim_c = Color::GrayDark;
 
-    if (width == 18 && height == 9) {
+    if (width == 18 && (height == 8 || height == 9)) {
+        if (height == 8) {
+            return vbox({
+                text(".----------------.") | color(dim_c) | center,
+                hbox({ text("|") | color(dim_c), text("     .----.     ") | color(accent_c), text("|") | color(dim_c) }) | center,
+                hbox({ text("|") | color(dim_c), text("    /  ●   \\    ") | color(accent_c), text("|") | color(dim_c) }) | center,
+                hbox({ text("|") | color(dim_c), text("   |   ◎    |   ") | color(accent_c) | bold, text("|") | color(dim_c) }) | center,
+                hbox({ text("|") | color(dim_c), text("    \\  ●   /    ") | color(accent_c), text("|") | color(dim_c) }) | center,
+                hbox({ text("|") | color(dim_c), text("     '----'     ") | color(accent_c), text("|") | color(dim_c) }) | center,
+                hbox({ text("|") | color(dim_c), text("   SOUNDCLOUD   ") | color(accent_c) | bold, text("|") | color(dim_c) }) | center,
+                text("'----------------'") | color(dim_c) | center
+            });
+        }
         return vbox({
             text(".----------------.") | color(dim_c) | center,
             hbox({ text("|") | color(dim_c), text("     .----.     ") | color(accent_c), text("|") | color(dim_c) }) | center,

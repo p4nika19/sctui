@@ -41,7 +41,7 @@ public:
         ImageProtocol protocol = ImageProtocol::Auto,
         uint32_t image_id = 1,
         int target_w = 18,
-        int target_h = 9
+        int target_h = 8
     );
 
     // Clears Kitty terminal image overlay (0 = all images, or specific image_id)

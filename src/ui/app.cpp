@@ -1370,16 +1370,20 @@ void App::submit_play_track(models::Track track) {
 
     // If queue doesn't contain track, add it
     bool in_queue = false;
-    for (size_t i = 0; i < state_.queue.tracks.size(); ++i) {
-        if (state_.queue.tracks[i].id == track.id) {
-            state_.queue.set_current_index(static_cast<int>(i));
-            in_queue = true;
-            break;
+    if (state_.queue.current_track().has_value() && state_.queue.current_track()->id == track.id) {
+        in_queue = true;
+    } else {
+        for (size_t i = 0; i < state_.queue.tracks.size(); ++i) {
+            if (state_.queue.tracks[i].id == track.id) {
+                state_.queue.set_current_index(static_cast<int>(i));
+                in_queue = true;
+                break;
+            }
         }
-    }
-    if (!in_queue) {
-        state_.queue.tracks.push_back(track);
-        state_.queue.set_current_index(static_cast<int>(state_.queue.tracks.size() - 1));
+        if (!in_queue) {
+            state_.queue.tracks.push_back(track);
+            state_.queue.set_current_index(static_cast<int>(state_.queue.tracks.size() - 1));
+        }
     }
 
     // Reset current cover art for new song and immediately clear previous terminal images
@@ -2546,12 +2550,12 @@ Element App::render_fullscreen_playback() {
     title = core::truncate_display_width(title, max_text_w);
     artist = core::truncate_display_width(artist, max_text_w);
 
-    // Cover art sizing
+    // Cover art sizing calibrated for terminal cell 2.25:1 aspect ratio to ensure square proportions
     int avail_upper_h = std::max(6, h - vis_h - 9);
-    int max_cover_h_by_w = std::max(6, (w - 8) / 2);
+    int max_cover_h_by_w = std::max(6, static_cast<int>((w - 8) / 2.25f));
     int cover_h = std::min(avail_upper_h - 2, max_cover_h_by_w);
-    cover_h = std::clamp(cover_h, 6, 26);
-    int cover_w = cover_h * 2;
+    cover_h = std::clamp(cover_h, 6, 24);
+    int cover_w = static_cast<int>(std::round(cover_h * 2.25f));
 
     Element cover_elem;
     if (state_.current_cover_art.has_value()) {

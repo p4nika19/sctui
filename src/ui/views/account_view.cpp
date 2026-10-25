@@ -178,9 +178,9 @@ Element AccountView::render(bool is_focused) {
     // Authenticated profile display
     Element avatar_elem;
     if (state_.user_profile.has_value() && state_.user_profile->avatar_image.has_value()) {
-        avatar_elem = core::CoverArtProcessor::render_cover_element(*state_.user_profile->avatar_image, config_.image_protocol, 2);
+        avatar_elem = core::CoverArtProcessor::render_cover_element(*state_.user_profile->avatar_image, config_.image_protocol, 2, 18, 8);
     } else {
-        avatar_elem = core::CoverArtProcessor::render_placeholder(18, 9, state_.accent_color);
+        avatar_elem = core::CoverArtProcessor::render_placeholder(18, 8, state_.accent_color);
     }
 
     const auto& prof = state_.user_profile;

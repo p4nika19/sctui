@@ -965,6 +965,70 @@ void test_queue_next_and_reorder() {
     std::cout << "  -> Queue Next insertion and Move To Next (normal & shuffle) OK" << std::endl;
 }
 
+void test_duplicate_track_shuffle_queue_next() {
+    std::cout << "[Test] Running Duplicate Track Shuffle Next & Sequential Playback verification..." << std::endl;
+
+    sctui::models::QueueState queue;
+    for (size_t i = 0; i < 20; ++i) {
+        sctui::models::Track t;
+        t.id = 1000 + i;
+        t.title = "Liked Song #" + std::to_string(i);
+        queue.tracks.push_back(t);
+    }
+    queue.current_index = 0;
+    queue.shuffle = true;
+    queue.rebuild_shuffle();
+
+    REQUIRE(queue.shuffle_indices.size() == 20);
+    REQUIRE(queue.shuffle_cursor == 0);
+    REQUIRE(queue.shuffle_indices[0] == 0);
+
+    // Pick an existing track (e.g., track with id 1005)
+    auto duplicate_track = queue.tracks[5];
+    REQUIRE(duplicate_track.id == 1005);
+
+    // Queue this duplicate as Next Up
+    queue.queue_track(duplicate_track, /*play_next=*/true);
+
+    REQUIRE(queue.tracks.size() == 21);
+    REQUIRE(queue.shuffle_indices.size() == 21);
+    // Duplicate track is inserted at current_index + 1 = 1
+    REQUIRE(queue.tracks[1].id == 1005);
+    // In shuffle order, duplicate is placed right after cursor at index 1
+    REQUIRE(queue.shuffle_indices[1] == 1);
+    REQUIRE(queue.tracks[queue.shuffle_indices[1]].id == 1005);
+
+    // Advance to next track (plays the duplicate track queued as Next Up)
+    queue.advance_next();
+    REQUIRE(queue.shuffle_cursor == 1);
+    REQUIRE(queue.current_index == 1);
+    auto current = queue.current_track();
+    REQUIRE(current.has_value());
+    REQUIRE(current->id == 1005);
+
+    // Calling set_current_index(1) on current track must not reset shuffle_cursor
+    // even though id 1005 exists elsewhere in the queue!
+    queue.set_current_index(1);
+    REQUIRE(queue.shuffle_cursor == 1);
+    REQUIRE(queue.current_index == 1);
+
+    // Simulate submit_play_track logic:
+    // If current_track() matches track.id, index and cursor are preserved!
+    bool in_queue = false;
+    if (queue.current_track().has_value() && queue.current_track()->id == current->id) {
+        in_queue = true;
+    }
+    REQUIRE(in_queue == true);
+    REQUIRE(queue.shuffle_cursor == 1);
+
+    // Advance to the subsequent track in shuffle
+    queue.advance_next();
+    REQUIRE(queue.shuffle_cursor == 2);
+    REQUIRE(queue.current_index == static_cast<int>(queue.shuffle_indices[2]));
+
+    std::cout << "  -> Duplicate track Next Up preserved sequential shuffle without skipping OK" << std::endl;
+}
+
 void test_volume_150_and_visualizer_curve() {
     std::cout << "[Test] Running Volume 150% & Visualizer Sensitivity Diminishing Returns curve..." << std::endl;
 
@@ -1612,6 +1676,7 @@ int main() {
     test_entropy_shuffle();
     test_dynamic_queue_append_and_shuffle();
     test_queue_next_and_reorder();
+    test_duplicate_track_shuffle_queue_next();
     test_volume_150_and_visualizer_curve();
     test_mouse_control_option();
     test_settings_and_mouse_coordinate_mapping();
