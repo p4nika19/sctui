@@ -113,11 +113,44 @@
             const hlsConfig = {
               enableWorker: false,
               emeEnabled: true,
+              requireKeySystemAccessOnStart: true,
+              defaultAudioCodec: 'mp4a.40.2',
               widevineLicenseUrl: fullLicenseUrl,
               drmSystems: {
                 'com.widevine.alpha': {
                   licenseUrl: fullLicenseUrl
                 }
+              },
+              drmSystemOptions: {
+                audioRobustness: '',
+                videoRobustness: '',
+                sessionType: 'temporary'
+              },
+              requestMediaKeySystemAccessFunc: function(keySystem, configs) {
+                if (keySystem !== 'com.widevine.alpha') {
+                  return Promise.reject(new Error('Unsupported key system on Linux: ' + keySystem));
+                }
+
+                // SoundCloud tracks are pure audio. Force valid AAC mp4a audio capabilities
+                // and strip videoCapabilities to avoid rejection on headless/Wayland systems without hardware video DRM.
+                const audioOnlyConfigs = configs.map(cfg => {
+                  const copy = Object.assign({}, cfg);
+                  delete copy.videoCapabilities;
+                  if (!copy.audioCapabilities || copy.audioCapabilities.length === 0) {
+                    copy.audioCapabilities = [
+                      { contentType: 'audio/mp4; codecs="mp4a.40.2"' },
+                      { contentType: 'audio/mp4; codecs="mp4a.40.5"' },
+                      { contentType: 'audio/mp4' }
+                    ];
+                  }
+                  return copy;
+                });
+
+                return navigator.requestMediaKeySystemAccess(keySystem, audioOnlyConfigs)
+                  .catch(err => {
+                    console.warn('[HLS:EME] Audio-only access failed (' + err.message + '), falling back to raw configs');
+                    return navigator.requestMediaKeySystemAccess(keySystem, configs);
+                  });
               },
               licenseXhrSetup: function(xhr, url, keySystem, data) {
                 try {

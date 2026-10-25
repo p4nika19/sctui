@@ -596,6 +596,12 @@ void DrmSatelliteDaemon::send_command(const std::string& json_line) {
 }
 
 void DrmSatelliteDaemon::play(uint64_t track_id, const std::string& stream_url) {
+    {
+        std::lock_guard<std::mutex> lock(last_stream_mutex_);
+        last_track_id_.store(track_id);
+        last_stream_url_ = stream_url;
+    }
+
     if (!is_running_.load()) {
         if (!start()) return;
     }
@@ -708,14 +714,25 @@ void DrmSatelliteDaemon::handle_ipc_message(const std::string& line) {
 
         if (type == "ready") {
             is_ready_.store(true);
+            retried_key_system_.store(false);
             LOG_INFO("DrmDaemon", "DRM satellite reported ready: CDM=" + j.value("cdm", "none"));
+        } else if (type == "restart_required") {
+            LOG_INFO("DrmDaemon", "Satellite daemon requested restart for Widevine CDM initialization. Restarting daemon...");
+            std::thread([this]() {
+                stop();
+                std::this_thread::sleep_for(std::chrono::milliseconds(250));
+                start();
+            }).detach();
         } else if (type == "state") {
             std::string state_str = j.value("playback_state", "stopped");
             uint64_t pos = j.value("position_ms", 0ULL);
             uint64_t dur = j.value("duration_ms", 0ULL);
 
             PlaybackState pb_state = PlaybackState::Stopped;
-            if (state_str == "playing") pb_state = PlaybackState::Playing;
+            if (state_str == "playing") {
+                pb_state = PlaybackState::Playing;
+                retried_key_system_.store(false);
+            }
             else if (state_str == "paused") pb_state = PlaybackState::Paused;
             else if (state_str == "buffering") pb_state = PlaybackState::Buffering;
             else if (state_str == "error") pb_state = PlaybackState::Error;
@@ -768,6 +785,29 @@ void DrmSatelliteDaemon::handle_ipc_message(const std::string& line) {
                 LOG_DEBUG("DrmDaemon", "Ignoring benign playback abort/interruption: " + msg);
                 return;
             }
+
+            if (msg.find("keySystemNoAccess") != std::string::npos && !retried_key_system_.exchange(true)) {
+                LOG_INFO("DrmDaemon", "keySystemNoAccess received on initial playback. Restarting daemon to reload Widevine CDM and retrying...");
+                uint64_t retry_track = last_track_id_.load();
+                std::string retry_url;
+                {
+                    std::lock_guard<std::mutex> lock(last_stream_mutex_);
+                    retry_url = last_stream_url_;
+                }
+                std::thread([this, retry_track, retry_url]() {
+                    stop();
+                    std::this_thread::sleep_for(std::chrono::milliseconds(300));
+                    if (start()) {
+                        // Wait for readiness
+                        for (int i = 0; i < 30 && !is_ready_.load() && is_running_.load(); ++i) {
+                            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+                        }
+                        play(retry_track, retry_url);
+                    }
+                }).detach();
+                return;
+            }
+
             LOG_ERROR("DrmDaemon", "DRM satellite error: " + msg);
             {
                 std::lock_guard<std::mutex> lock(state_mutex_);

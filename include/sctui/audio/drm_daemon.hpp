@@ -70,6 +70,10 @@ private:
     std::atomic<bool> is_running_{false};
     std::atomic<bool> is_ready_{false};
     std::atomic<float> current_volume_{0.2176f};
+    std::atomic<bool> retried_key_system_{false};
+    std::atomic<uint64_t> last_track_id_{0};
+    std::string last_stream_url_{};
+    std::mutex last_stream_mutex_{};
 
     mutable std::mutex state_mutex_;
     DrmSatelliteState state_;

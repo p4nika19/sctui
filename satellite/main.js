@@ -23,6 +23,7 @@ app.commandLine.appendSwitch('disable-features', 'HardwareMediaKeyHandling');
 app.commandLine.appendSwitch('disk-cache-size', String(256 * 1024 * 1024));
 app.commandLine.appendSwitch('disable-background-timer-throttling');
 app.commandLine.appendSwitch('disable-renderer-backgrounding');
+app.commandLine.appendSwitch('unsafely-treat-insecure-origin-as-secure', 'http://127.0.0.1:47823,http://localhost:47823');
 
 // Persistent profile for Widevine CDM keys/certificates
 const defaultProfile = path.join(app.getPath('appData'), 'sctui-satellite');
@@ -312,7 +313,36 @@ app.whenReady().then(async () => {
     logDebug('[Page]', e.message);
   });
 
-  win.webContents.on('did-finish-load', () => {
+  win.webContents.on('did-finish-load', async () => {
+    // Probe Widevine CDM accessibility
+    let emeFunctional = false;
+    try {
+      emeFunctional = await win.webContents.executeJavaScript(`
+        (async () => {
+          if (typeof navigator.requestMediaKeySystemAccess !== 'function') return false;
+          try {
+            await navigator.requestMediaKeySystemAccess('com.widevine.alpha', [{
+              initDataTypes: ['cenc'],
+              audioCapabilities: [{ contentType: 'audio/mp4; codecs="mp4a.40.2"' }]
+            }]);
+            return true;
+          } catch (e) {
+            console.warn('[Probe] Widevine test failed:', e.name, e.message);
+            return false;
+          }
+        })()
+      `);
+    } catch (e) {
+      logDebug('Widevine probe execution failed: ' + e.message);
+    }
+
+    if (!emeFunctional && process.platform === 'linux') {
+      logInfo('Widevine CDM newly downloaded or not loaded into current sandbox session. Relaunching satellite daemon...');
+      sendIPC({ type: 'restart_required' });
+      cleanupAndExit(42);
+      return;
+    }
+
     isPageReady = true;
     win.webContents.send('cmd-volume', currentVolume);
     sendIPC({
