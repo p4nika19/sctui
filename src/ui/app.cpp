@@ -21,6 +21,11 @@ App::App(core::Config config)
 
     cache_manager_ = std::make_shared<core::TrackCacheManager>(config_.cache_dir);
     audio_.set_cache_manager(cache_manager_);
+    if (cache_manager_) {
+        for (uint64_t id : cache_manager_->get_liked_track_ids()) {
+            state_.liked_track_ids.insert(id);
+        }
+    }
 
     state_.volume_percent = static_cast<float>(config_.volume);
     state_.mouse_control = config_.mouse_control;
@@ -1412,27 +1417,61 @@ void App::submit_play_track(models::Track track) {
 }
 
 void App::submit_toggle_like(models::Track track) {
-    thread_pool_.enqueue([this, track]() {
-        if (!is_running_) return;
-        auto res = api_.toggle_like_track(track.id, track.is_liked);
-        if (!is_running_) return;
-        bool now_liked = res ? *res : !track.is_liked;
-        if (cache_manager_) {
-            cache_manager_->update_track_liked(track.id, now_liked);
+    bool current_liked = state_.is_track_liked(track.id) || track.is_liked;
+    bool now_liked = !current_liked;
+
+    // Optimistically update local state immediately
+    if (now_liked) {
+        state_.liked_track_ids.insert(track.id);
+        auto it = std::find_if(state_.likes_tracks.begin(), state_.likes_tracks.end(),
+            [id = track.id](const models::Track& t) { return t.id == id; });
+        if (it == state_.likes_tracks.end()) {
+            auto liked_track = track;
+            liked_track.is_liked = true;
+            state_.likes_tracks.insert(state_.likes_tracks.begin(), std::move(liked_track));
         }
-        if (res) {
-            ui_event_channel_.push(AsyncUIEvent{
-                .type = AsyncEventType::InfoMessage,
-                .text_payload = (*res ? "Added to Likes: " : "Removed from Likes: ") + core::truncate_string(track.title, 25)
-            });
-        } else {
-            // Local like toggle fallback
-            ui_event_channel_.push(AsyncUIEvent{
-                .type = AsyncEventType::InfoMessage,
-                .text_payload = "Saved to local Likes: " + core::truncate_string(track.title, 25)
-            });
+    } else {
+        state_.liked_track_ids.erase(track.id);
+        state_.likes_tracks.erase(
+            std::remove_if(state_.likes_tracks.begin(), state_.likes_tracks.end(),
+                [id = track.id](const models::Track& t) { return t.id == id; }),
+            state_.likes_tracks.end()
+        );
+        if (state_.likes_selected_index >= static_cast<int>(state_.likes_tracks.size())) {
+            state_.likes_selected_index = std::max(0, static_cast<int>(state_.likes_tracks.size()) - 1);
         }
-        screen_.PostEvent(Event::Custom);
+    }
+
+    auto update_list = [id = track.id, now_liked](std::vector<models::Track>& list) {
+        for (auto& t : list) {
+            if (t.id == id) {
+                t.is_liked = now_liked;
+            }
+        }
+    };
+    update_list(state_.search_results);
+    update_list(state_.stream_tracks);
+    update_list(state_.playlist_tracks);
+    update_list(state_.queue.tracks);
+    update_list(state_.user_tracks);
+    if (state_.active_track && state_.active_track->id == track.id) {
+        state_.active_track->is_liked = now_liked;
+    }
+
+    if (cache_manager_) {
+        cache_manager_->update_track_liked(track.id, now_liked);
+    }
+
+    state_.notify((now_liked ? "Added to Likes: " : "Removed from Likes: ") + core::truncate_string(track.title, 25));
+
+    // Async network call to sync with SoundCloud
+    thread_pool_.enqueue([this, track_id = track.id, current_liked]() {
+        if (!is_running_) return;
+        auto res = api_.toggle_like_track(track_id, current_liked);
+        if (!is_running_) return;
+        if (!res) {
+            LOG_WARN("App", "Remote like toggle failed for track " + std::to_string(track_id) + ": " + res.error().message);
+        }
     });
 }
 
@@ -1719,6 +1758,10 @@ void App::process_async_events() {
             case AsyncEventType::LikesTracksReady:
                 state_.likes_tracks = std::move(evt.tracks_payload);
                 state_.likes_selected_index = 0;
+                state_.liked_track_ids.clear();
+                for (const auto& t : state_.likes_tracks) {
+                    state_.liked_track_ids.insert(t.id);
+                }
                 if (cache_manager_) {
                     std::vector<uint64_t> liked_ids;
                     liked_ids.reserve(state_.likes_tracks.size());
@@ -1729,6 +1772,9 @@ void App::process_async_events() {
                 }
                 break;
             case AsyncEventType::LikesTracksAppended:
+                for (const auto& t : evt.tracks_payload) {
+                    state_.liked_track_ids.insert(t.id);
+                }
                 if (cache_manager_) {
                     std::vector<uint64_t> liked_ids;
                     liked_ids.reserve(evt.tracks_payload.size());
@@ -1747,6 +1793,9 @@ void App::process_async_events() {
                 );
                 break;
             case AsyncEventType::LikesTracksDiffPrepended:
+                for (const auto& t : evt.tracks_payload) {
+                    state_.liked_track_ids.insert(t.id);
+                }
                 if (cache_manager_) {
                     std::vector<uint64_t> liked_ids;
                     liked_ids.reserve(evt.tracks_payload.size());

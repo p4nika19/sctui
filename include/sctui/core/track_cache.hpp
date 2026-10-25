@@ -99,6 +99,9 @@ public:
     // Synchronizes all liked tracks from state/api (e.g. when likes are loaded)
     void sync_liked_tracks(const std::vector<uint64_t>& liked_ids);
 
+    // Returns all track IDs currently marked as liked in cache
+    [[nodiscard]] std::vector<uint64_t> get_liked_track_ids() const;
+
     // Enforces max cache size with liked locking & exclude options
     void enforce_cache_limits(
         size_t max_cache_size_mb,

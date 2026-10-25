@@ -62,6 +62,11 @@ public:
         const std::unordered_map<std::string, std::string>& headers = {}
     );
 
+    core::Result<HttpResponse> del(
+        const std::string& url,
+        const std::unordered_map<std::string, std::string>& headers = {}
+    );
+
     static std::string url_encode(const std::string& value);
 
 private:

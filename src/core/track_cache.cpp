@@ -304,6 +304,17 @@ void TrackCacheManager::sync_liked_tracks(const std::vector<uint64_t>& liked_ids
     save_metadata();
 }
 
+std::vector<uint64_t> TrackCacheManager::get_liked_track_ids() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    std::vector<uint64_t> liked;
+    for (const auto& [id, info] : tracks_) {
+        if (info.is_liked) {
+            liked.push_back(id);
+        }
+    }
+    return liked;
+}
+
 void TrackCacheManager::enforce_cache_limits(
     size_t max_cache_size_mb,
     bool lock_liked,

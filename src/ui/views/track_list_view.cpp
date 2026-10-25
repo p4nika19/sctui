@@ -7,6 +7,30 @@ namespace sctui::ui::views {
 
 using namespace ftxui;
 
+namespace {
+
+Element render_like_badge(bool is_liked, core::IconStyle icon_style) {
+    if (!is_liked) {
+        return text("   ") | size(WIDTH, EQUAL, 3);
+    }
+    const auto& sym = ThemeSymbols::get(icon_style);
+    std::string badge_str;
+    switch (icon_style) {
+        case core::IconStyle::Emoji:
+            badge_str = " " + sym.likes;
+            break;
+        case core::IconStyle::Unicode:
+            badge_str = " " + sym.likes + " ";
+            break;
+        case core::IconStyle::DefaultAscii:
+            badge_str = sym.likes;
+            break;
+    }
+    return text(badge_str) | color(Color::RGB(255, 65, 105)) | bold | size(WIDTH, EQUAL, 3);
+}
+
+} // namespace
+
 TrackListView::TrackListView(
     models::AppState& state,
     PlayCallback on_play,
@@ -384,10 +408,15 @@ Element TrackListView::render(bool is_focused) {
 
     Elements rows;
 
+    bool show_like_col = (state_.current_view != models::ViewMode::Likes);
+
     // Header row
     Elements header_cols;
     header_cols.push_back(text("  #  ") | color(Color::GrayDark) | bold | size(WIDTH, EQUAL, 5));
     header_cols.push_back(text("TITLE") | color(Color::GrayLight) | bold | xflex);
+    if (show_like_col) {
+        header_cols.push_back(text("   ") | size(WIDTH, EQUAL, 3));
+    }
     if (!state_.is_compact()) {
         header_cols.push_back(text("ARTIST") | color(Color::GrayLight) | bold | size(WIDTH, EQUAL, 24));
         header_cols.push_back(text("TIME") | color(Color::GrayLight) | bold | size(WIDTH, EQUAL, 8));
@@ -399,9 +428,9 @@ Element TrackListView::render(bool is_focused) {
     rows.push_back(separatorLight());
 
     int sidebar_w = state_.is_compact() ? 8 : 22;
-    int fixed_cols = 5 + 24 + 8 + (state_.is_ultrawide() ? 52 : 0);
+    int fixed_cols = 5 + 24 + 8 + (state_.is_ultrawide() ? 52 : 0) + (show_like_col ? 3 : 0);
     int avail_row_w = std::max(20, state_.terminal_width - sidebar_w - 6);
-    int max_title_w = state_.is_compact() ? std::max(12, avail_row_w - 7) : std::max(12, avail_row_w - fixed_cols);
+    int max_title_w = state_.is_compact() ? std::max(12, avail_row_w - 7 - (show_like_col ? 3 : 0)) : std::max(12, avail_row_w - fixed_cols);
 
     for (int i = start_idx; i < end_idx; ++i) {
         const auto& track = tracks[static_cast<size_t>(i)];
@@ -446,6 +475,12 @@ Element TrackListView::render(bool is_focused) {
         }
         title_elements.push_back(filler());
         cols.push_back(hbox(std::move(title_elements)) | xflex);
+
+        // Liked track badge (placed between title and artist, everywhere except Likes tab)
+        if (show_like_col) {
+            bool is_liked = state_.is_track_liked(track.id) || track.is_liked;
+            cols.push_back(render_like_badge(is_liked, state_.icon_style));
+        }
 
         // Artist & Duration in normal mode
         if (!state_.is_compact()) {

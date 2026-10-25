@@ -2,6 +2,7 @@
 
 #include <string>
 #include <vector>
+#include <unordered_set>
 #include <optional>
 #include <array>
 #include <chrono>
@@ -294,6 +295,11 @@ struct AppState {
 
     std::vector<Track> likes_tracks;
     int likes_selected_index{0};
+    std::unordered_set<uint64_t> liked_track_ids;
+
+    [[nodiscard]] bool is_track_liked(uint64_t track_id) const noexcept {
+        return liked_track_ids.find(track_id) != liked_track_ids.end();
+    }
 
     std::vector<Playlist> playlists;
     int playlist_selected_index{0};

@@ -361,4 +361,76 @@ core::Result<HttpResponse> HttpClient::post(
     return response;
 }
 
+core::Result<HttpResponse> HttpClient::del(
+    const std::string& url,
+    const std::unordered_map<std::string, std::string>& headers
+) {
+    CURL* curl = curl_easy_init();
+    if (!curl) {
+        return core::MakeError(core::ErrorCode::NetworkError, "Failed to initialize libcurl");
+    }
+
+    HttpResponse response;
+    struct curl_slist* chunk = nullptr;
+
+    for (const auto& [k, v] : headers) {
+        std::string header_line = k + ": " + v;
+        chunk = curl_slist_append(chunk, header_line.c_str());
+    }
+
+    if (!impl_->bearer_token.empty() && headers.find("Authorization") == headers.end()) {
+        std::string auth_header = "Authorization: OAuth " + impl_->bearer_token;
+        chunk = curl_slist_append(chunk, auth_header.c_str());
+    }
+
+    curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
+    curl_easy_setopt(curl, CURLOPT_CUSTOMREQUEST, "DELETE");
+    curl_easy_setopt(curl, CURLOPT_USERAGENT, impl_->user_agent.c_str());
+    curl_easy_setopt(curl, CURLOPT_TIMEOUT, impl_->timeout_seconds);
+
+    if (!impl_->doh_url.empty()) {
+        curl_easy_setopt(curl, CURLOPT_DOH_URL, impl_->doh_url.c_str());
+    }
+    if (!impl_->dns_servers.empty()) {
+        curl_easy_setopt(curl, CURLOPT_DNS_SERVERS, impl_->dns_servers.c_str());
+    }
+    if (!impl_->proxy.empty()) {
+        curl_easy_setopt(curl, CURLOPT_PROXY, impl_->proxy.c_str());
+    }
+
+    if (chunk) {
+        curl_easy_setopt(curl, CURLOPT_HTTPHEADER, chunk);
+    }
+
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, Impl::write_string_callback);
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response.body);
+
+    curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, Impl::header_callback);
+    curl_easy_setopt(curl, CURLOPT_HEADERDATA, &response.headers);
+
+    CURLcode res = curl_easy_perform(curl);
+    if (res != CURLE_OK) {
+        std::string err_msg = curl_easy_strerror(res);
+        if (chunk) curl_slist_free_all(chunk);
+        curl_easy_cleanup(curl);
+        return core::MakeError(core::ErrorCode::NetworkError, "DELETE request failed: " + err_msg);
+    }
+
+    long http_code = 0;
+    curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_code);
+    response.status_code = static_cast<int>(http_code);
+
+    if (chunk) curl_slist_free_all(chunk);
+    curl_easy_cleanup(curl);
+
+    if (response.status_code == 429) {
+        return core::MakeError(core::ErrorCode::RateLimited, "SoundCloud API rate limit exceeded", 429);
+    }
+    if (response.status_code >= 400) {
+        return core::MakeError(core::ErrorCode::HttpError, "HTTP error: " + std::to_string(response.status_code), response.status_code);
+    }
+
+    return response;
+}
+
 } // namespace sctui::net

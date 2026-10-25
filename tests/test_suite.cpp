@@ -18,6 +18,7 @@
 #include "sctui/discord/discord_rpc.hpp"
 #include "sctui/ui/views/settings_view.hpp"
 #include "sctui/ui/views/onboarding_view.hpp"
+#include "sctui/ui/views/track_list_view.hpp"
 #include <fstream>
 #include <set>
 #include <nlohmann/json.hpp>
@@ -1330,6 +1331,143 @@ void test_onboarding_wizard() {
     std::cout << "  -> First-Run Onboarding state machine, persistent header, and 3-step transitions OK" << std::endl;
 }
 
+void test_like_indicator_and_toggle_unlike() {
+    std::cout << "[Test] Running Liked Track Indicator & Repeated Unlike verification..." << std::endl;
+
+    // 1. AppState liked_track_ids tracking
+    sctui::models::AppState state;
+    REQUIRE(!state.is_track_liked(12345));
+
+    state.liked_track_ids.insert(12345);
+    REQUIRE(state.is_track_liked(12345));
+
+    // Repeated like toggles it off (unlikes)
+    bool current_liked = state.is_track_liked(12345);
+    REQUIRE(current_liked == true);
+    bool now_liked = !current_liked;
+    REQUIRE(now_liked == false);
+    state.liked_track_ids.erase(12345);
+    REQUIRE(!state.is_track_liked(12345));
+
+    // 2. TrackCacheManager liked track IDs retrieval
+    std::filesystem::path test_dir = "/tmp/sctui_test_likes_cache_" + std::to_string(getpid());
+    std::filesystem::create_directories(test_dir);
+    {
+        sctui::core::TrackCacheManager mgr(test_dir);
+        auto make_dummy_file = [](const std::filesystem::path& p) {
+            std::ofstream ofs(p, std::ios::binary);
+            std::string data(2048, 'A');
+            ofs.write(data.data(), data.size());
+        };
+        make_dummy_file(mgr.get_track_cache_path(1001));
+        make_dummy_file(mgr.get_track_cache_path(1002));
+        make_dummy_file(mgr.get_track_cache_path(1003));
+
+        mgr.register_track(1001, "Track 1", "Artist 1", true);
+        mgr.register_track(1002, "Track 2", "Artist 2", false);
+        mgr.register_track(1003, "Track 3", "Artist 3", true);
+
+        auto liked = mgr.get_liked_track_ids();
+        REQUIRE(liked.size() == 2);
+        REQUIRE(std::find(liked.begin(), liked.end(), 1001) != liked.end());
+        REQUIRE(std::find(liked.begin(), liked.end(), 1003) != liked.end());
+        REQUIRE(std::find(liked.begin(), liked.end(), 1002) == liked.end());
+
+        // Unlike track 1001
+        mgr.update_track_liked(1001, false);
+        liked = mgr.get_liked_track_ids();
+        REQUIRE(liked.size() == 1);
+        REQUIRE(liked[0] == 1003);
+    }
+    std::filesystem::remove_all(test_dir);
+    std::cout << "  -> CacheManager get_liked_track_ids and update_track_liked OK" << std::endl;
+
+    // 3. TrackListView indicator placement & omission on Likes tab
+    state.terminal_width = 120;
+    state.terminal_height = 35;
+    state.icon_style = sctui::core::IconStyle::Emoji;
+
+    sctui::models::Track track1;
+    track1.id = 7001;
+    track1.title = "Synth Odyssey";
+    track1.artist = "Neon Runner";
+    track1.duration_ms = 210000;
+    track1.is_liked = true;
+
+    sctui::models::Track track2;
+    track2.id = 7002;
+    track2.title = "Midnight Drive";
+    track2.artist = "Retro Dream";
+    track2.duration_ms = 195000;
+    track2.is_liked = false;
+
+    state.liked_track_ids.insert(track1.id);
+
+    sctui::ui::views::TrackListView track_list(state, nullptr, nullptr, nullptr, nullptr);
+
+    // Test Search tab (must show like indicator for track1)
+    state.current_view = sctui::models::ViewMode::Search;
+    state.search_results = {track1, track2};
+    auto elem_search = track_list.render(true);
+    auto screen_search = ftxui::Screen::Create(ftxui::Dimension::Fixed(120), ftxui::Dimension::Fixed(35));
+    ftxui::Render(screen_search, elem_search);
+    std::string out_search = screen_search.ToString();
+
+    REQUIRE(out_search.find("Synth Odyssey") != std::string::npos);
+    REQUIRE(out_search.find("Midnight Drive") != std::string::npos);
+    // Track 1 is liked, heart emoji indicator rendered between title and artist
+    REQUIRE(out_search.find("💖") != std::string::npos);
+    std::cout << "  -> Liked badge indicator rendered in Search results OK" << std::endl;
+
+    // Test Playlists tab with selected playlist (must show like indicator for track1)
+    state.current_view = sctui::models::ViewMode::Playlists;
+    state.selected_playlist = sctui::models::Playlist{.id = 42, .title = "Best Vibes"};
+    state.playlist_tracks = {track1, track2};
+    auto elem_playlist = track_list.render(true);
+    auto screen_playlist = ftxui::Screen::Create(ftxui::Dimension::Fixed(120), ftxui::Dimension::Fixed(35));
+    ftxui::Render(screen_playlist, elem_playlist);
+    std::string out_playlist = screen_playlist.ToString();
+
+    REQUIRE(out_playlist.find("PLAYLIST: Best Vibes") != std::string::npos);
+    REQUIRE(out_playlist.find("Synth Odyssey") != std::string::npos);
+    REQUIRE(out_playlist.find("💖") != std::string::npos);
+    std::cout << "  -> Liked badge indicator rendered in Playlist tracks OK" << std::endl;
+
+    // Test Likes tab (like indicator MUST BE OMITTED)
+    state.current_view = sctui::models::ViewMode::Likes;
+    state.likes_tracks = {track1, track2};
+    auto elem_likes = track_list.render(true);
+    auto screen_likes = ftxui::Screen::Create(ftxui::Dimension::Fixed(120), ftxui::Dimension::Fixed(35));
+    ftxui::Render(screen_likes, elem_likes);
+    std::string out_likes = screen_likes.ToString();
+
+    REQUIRE(out_likes.find(" LIKES ") != std::string::npos);
+    REQUIRE(out_likes.find("Synth Odyssey") != std::string::npos);
+    // In Likes view, the like badge column is omitted per requirement
+    REQUIRE(out_likes.find("💖") == std::string::npos);
+    std::cout << "  -> Liked badge indicator strictly omitted on Likes tab OK" << std::endl;
+
+    // Test unliking track1 in Search view (toggle repeated like)
+    state.current_view = sctui::models::ViewMode::Search;
+    state.liked_track_ids.erase(track1.id);
+    state.search_results[0].is_liked = false;
+    auto elem_unliked = track_list.render(true);
+    auto screen_unliked = ftxui::Screen::Create(ftxui::Dimension::Fixed(120), ftxui::Dimension::Fixed(35));
+    ftxui::Render(screen_unliked, elem_unliked);
+    std::string out_unliked = screen_unliked.ToString();
+
+    REQUIRE(out_unliked.find("Synth Odyssey") != std::string::npos);
+    REQUIRE(out_unliked.find("💖") == std::string::npos);
+    std::cout << "  -> Unliking removes badge immediately OK" << std::endl;
+
+    // 4. Test HttpClient::del
+    sctui::net::HttpClient http;
+    http.set_timeout_seconds(1);
+    auto del_res = http.del("http://127.0.0.1:9999/not-existing-test-endpoint");
+    REQUIRE(!del_res); // Confirms curl executes DELETE request and handles network failure cleanly
+    std::cout << "  -> HttpClient del (DELETE) request execution OK" << std::endl;
+}
+
 int main() {
     std::cout << "=== Running sctui test suite ===" << std::endl;
     test_spsc_queue();
@@ -1358,6 +1496,7 @@ int main() {
     test_soundcloud_api();
     test_user_library();
     test_account_profile();
+    test_like_indicator_and_toggle_unlike();
     std::cout << "=== All tests PASSED successfully! ===" << std::endl;
     return 0;
 }

@@ -50,6 +50,9 @@ namespace {
         if (track_obj.contains("monetization_model") && track_obj["monetization_model"].is_string()) {
             track.monetization_model = track_obj["monetization_model"].get<std::string>();
         }
+        if (track_obj.contains("user_favorite") && track_obj["user_favorite"].is_boolean()) {
+            track.is_liked = track_obj["user_favorite"].get<bool>();
+        }
 
         // User / Artist
         if (track_obj.contains("user") && track_obj["user"].is_object()) {
@@ -466,7 +469,9 @@ core::Result<SoundCloudApi::LikesPage> SoundCloudApi::get_user_likes_page(
                     track_obj = &item["track"];
                 }
                 if (track_obj->contains("id") && (*track_obj)["id"].is_number()) {
-                    page.tracks.push_back(parse_track_object(*track_obj));
+                    auto trk = parse_track_object(*track_obj);
+                    trk.is_liked = true;
+                    page.tracks.push_back(std::move(trk));
                 }
             }
         }
@@ -924,16 +929,37 @@ core::Result<bool> SoundCloudApi::toggle_like_track(uint64_t track_id, bool curr
         return core::MakeError(core::ErrorCode::AuthError, "OAuth token required to like tracks");
     }
 
+    if (client_id_.empty()) {
+        (void)resolve_client_id();
+    }
+
     std::string url = std::string(ApiBase) + "/me/track_likes/" + std::to_string(track_id);
+    if (!client_id_.empty()) {
+        url += "?client_id=" + client_id_;
+    }
+
     if (current_liked_state) {
-        // DELETE request not explicitly implemented in basic client, simulate toggle
-        return false;
+        auto resp = http_.del(url);
+        if (resp && resp->is_2xx()) {
+            LOG_INFO("SoundCloudApi", "Successfully unliked track " + std::to_string(track_id));
+            return false;
+        }
+        if (!resp) {
+            LOG_ERROR("SoundCloudApi", "Failed to unlike track " + std::to_string(track_id) + ": " + resp.error().message);
+            return core::MakeError(resp.error().code, resp.error().message, resp.error().http_status);
+        }
+        return core::MakeError(core::ErrorCode::HttpError, "Failed to unlike track HTTP " + std::to_string(resp->status_code), resp->status_code);
     } else {
         auto resp = http_.post(url, "{}");
         if (resp && resp->is_2xx()) {
+            LOG_INFO("SoundCloudApi", "Successfully liked track " + std::to_string(track_id));
             return true;
         }
-        return !current_liked_state;
+        if (!resp) {
+            LOG_ERROR("SoundCloudApi", "Failed to like track " + std::to_string(track_id) + ": " + resp.error().message);
+            return core::MakeError(resp.error().code, resp.error().message, resp.error().http_status);
+        }
+        return core::MakeError(core::ErrorCode::HttpError, "Failed to like track HTTP " + std::to_string(resp->status_code), resp->status_code);
     }
 }
 
