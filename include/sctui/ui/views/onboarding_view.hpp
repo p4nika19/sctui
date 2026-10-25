@@ -30,6 +30,7 @@ public:
         FinishCallback on_finish,
         ExtractCookiesCallback on_extract_cookies = nullptr
     );
+    ~OnboardingView();
 
     ftxui::Component get_component();
     ftxui::Element render();
@@ -61,6 +62,7 @@ private:
     int icon_style_idx_{0};
     int image_protocol_idx_{0};
     std::optional<models::CoverArtImage> preview_image_;
+    bool preview_drawn_in_terminal_{false};
 
     // Step 3: Engine & Connectivity state
     int dns_mode_idx_{0};

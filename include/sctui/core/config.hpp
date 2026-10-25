@@ -36,7 +36,7 @@ enum class DohProvider {
 };
 
 enum class IconStyle {
-    Emoji = 0,       // Full color emojis: ☁, 🔍, 👤, ❤, 📁, 🔀, 🔁, 🔊, 🔇, ⚙
+    Emoji = 0,       // Full color emojis: ☁, 🔍, 👤, 💖, 📁, 🔀, 🔁, 🔊, 🔇, ⚙
     Unicode = 1,     // Clean Unicode typographic symbols: ☁, ⌕, ☺, ♥, ≡, ⇄, ↻, ☊, ⛭
     DefaultAscii = 2 // Plain ASCII / Default symbols: [SC], [/], [@], <3>, [=], [~], [R], (Vol), [*]
 };
@@ -154,7 +154,7 @@ struct Config {
 
     static const char* icon_style_to_string(IconStyle style) {
         switch (style) {
-            case IconStyle::Emoji: return "Emoji (Color Emojis: ☁, 🔍, 👤, ❤, 📁)";
+            case IconStyle::Emoji: return "Emoji (Color Emojis: ☁, 🔍, 👤, 💖, 📁)";
             case IconStyle::Unicode: return "Unicode (Clean Symbols: ☁, ⌕, ☺, ♥, ≡)";
             case IconStyle::DefaultAscii: return "Default (Plain ASCII: [SC], [/], [@], <3>)";
         }

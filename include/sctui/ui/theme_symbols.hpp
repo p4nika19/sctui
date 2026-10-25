@@ -10,7 +10,7 @@ struct ThemeSymbols {
     std::string logo;          // ☁ / ☁ / [SC]
     std::string search;        // 🔍 / ⌕ / [/]
     std::string stream;        // 📡 / ◎ / [*]
-    std::string likes;         // ❤ / ♥ / <3>
+    std::string likes;         // 💖 / ♥ / <3>
     std::string playlists;     // 📁 / ≡ / [=]
     std::string queue;         // 📋 / ≣ / [#]
     std::string account;       // 👤 / ☺ / [@]

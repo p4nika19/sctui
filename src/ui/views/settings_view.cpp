@@ -742,7 +742,7 @@ Element SettingsView::render(bool is_focused) {
 
     // 3. UI Icon & Symbols Style selector
     const char* icon_styles[] = {
-        "Emoji (Color Emojis: ☁, 🔍, 👤, ❤, 📁)",
+        "Emoji (Color Emojis: ☁, 🔍, 👤, 💖, 📁)",
         "Unicode (Clean Symbols: ☁, ⌕, ☺, ♥, ≡)",
         "Default (Plain ASCII: [SC], [/], [@], <3>)"
     };

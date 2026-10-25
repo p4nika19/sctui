@@ -203,7 +203,13 @@
       window.sctuiBridge.onCommand('cmd-seek', (posMs) => {
         try {
           if (!isNaN(posMs)) {
-            audio.currentTime = Math.max(0, posMs / 1000);
+            const targetSec = Math.max(0, posMs / 1000);
+            const savedVol = currentVolume;
+            audio.volume = 0;
+            audio.currentTime = targetSec;
+            setTimeout(() => {
+              try { audio.volume = savedVol; } catch (e) {}
+            }, 30);
           }
         } catch (e) {}
       });

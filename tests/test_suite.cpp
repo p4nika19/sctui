@@ -1263,7 +1263,25 @@ void test_onboarding_wizard() {
     REQUIRE(out2.find("Live Protocol Preview Comparison") != std::string::npos);
     REQUIRE(out2.find("Sindrom Sobstvennika") != std::string::npos);
 
+    // Verify wide sparkling heart 💖 emoji is used in examples and preview
+    REQUIRE(out2.find("💖 Like") != std::string::npos);
+    REQUIRE(out2.find("Auto-detects terminal capability") != std::string::npos);
+    REQUIRE(out2.find("(Kitty, Ghostty, WezTerm") != std::string::npos);
+
+    // Test selecting "Disabled" protocol (Field 1)
+    onboarding.select_field(1);
+    for (int p = 0; p < 4; ++p) {
+        onboarding.get_component()->OnEvent(ftxui::Event::ArrowRight); // cycle to Disabled (idx 4)
+    }
+    auto elem_disabled = onboarding.render();
+    auto screen_disabled = ftxui::Screen::Create(ftxui::Dimension::Fixed(120), ftxui::Dimension::Fixed(40));
+    ftxui::Render(screen_disabled, elem_disabled);
+    std::string out_disabled = screen_disabled.ToString();
+    REQUIRE(out_disabled.find("Disabled (No artwork overlays)") != std::string::npos);
+    REQUIRE(out_disabled.find("[ Disabled ]") != std::string::npos);
+
     // Toggle Icon Style to Unicode Clean and verify
+    onboarding.select_field(0);
     onboarding.get_component()->OnEvent(ftxui::Event::ArrowRight);
     REQUIRE(state.icon_style == sctui::core::IconStyle::Unicode);
 

@@ -132,6 +132,8 @@ OnboardingView::OnboardingView(
                 }
                 if (selected_field_ == 1) { // Cover Art Protocol
                     image_protocol_idx_ = (image_protocol_idx_ + 4) % 5;
+                    core::CoverArtProcessor::clear_terminal_image(888);
+                    preview_drawn_in_terminal_ = false;
                     return true;
                 }
                 if (selected_field_ == 3) { // Switch between Previous and Next
@@ -147,6 +149,8 @@ OnboardingView::OnboardingView(
                 }
                 if (selected_field_ == 1) { // Cover Art Protocol
                     image_protocol_idx_ = (image_protocol_idx_ + 1) % 5;
+                    core::CoverArtProcessor::clear_terminal_image(888);
+                    preview_drawn_in_terminal_ = false;
                     return true;
                 }
                 if (selected_field_ == 2) { // Switch between Previous and Next
@@ -163,6 +167,8 @@ OnboardingView::OnboardingView(
                 }
                 if (selected_field_ == 1) {
                     image_protocol_idx_ = (image_protocol_idx_ + 1) % 5;
+                    core::CoverArtProcessor::clear_terminal_image(888);
+                    preview_drawn_in_terminal_ = false;
                     return true;
                 }
                 if (selected_field_ == 2) {
@@ -389,6 +395,9 @@ OnboardingView::OnboardingView(
                     sync_to_config();
                     config_.onboarding_completed = true;
                     (void)config_.save();
+                    core::CoverArtProcessor::clear_terminal_image(888);
+                    core::CoverArtProcessor::clear_terminal_image(0);
+                    preview_drawn_in_terminal_ = false;
                     if (on_finish_) {
                         on_finish_();
                     }
@@ -400,6 +409,10 @@ OnboardingView::OnboardingView(
 
         return false;
     });
+}
+
+OnboardingView::~OnboardingView() {
+    core::CoverArtProcessor::clear_terminal_image(888);
 }
 
 void OnboardingView::load_static_fixture() {
@@ -468,6 +481,10 @@ bool OnboardingView::is_step3_editing_text() const {
 }
 
 void OnboardingView::set_step(OnboardingStep step) {
+    if (step != OnboardingStep::Appearance || current_step_ == OnboardingStep::Appearance) {
+        core::CoverArtProcessor::clear_terminal_image(888);
+        preview_drawn_in_terminal_ = false;
+    }
     current_step_ = step;
     selected_field_ = 0;
 }
@@ -544,6 +561,10 @@ Element OnboardingView::render_persistent_header() {
 }
 
 Element OnboardingView::render_step1_auth() {
+    if (preview_drawn_in_terminal_) {
+        core::CoverArtProcessor::clear_terminal_image(888);
+        preview_drawn_in_terminal_ = false;
+    }
     auto accent = state_.get_accent_color();
     clickable_zones_.clear();
 
@@ -620,7 +641,7 @@ Element OnboardingView::render_step2_appearance() {
 
     // 1. "Icon & Symbols Style" setting
     const char* icon_styles[] = {
-        "Emoji (Color Emojis: ☁, 🔍, 👤, ❤, 📁)",
+        "Emoji (Color Emojis: ☁, 🔍, 👤, 💖, 📁)",
         "Unicode (Clean Symbols: ☁, ⌕, ☺, ♥, ≡)",
         "Default (Plain ASCII: [SC], [/], [@], <3>)"
     };
@@ -630,7 +651,7 @@ Element OnboardingView::render_step2_appearance() {
 
     std::string inline_examples;
     if (icon_style_idx_ == 0) {
-        inline_examples = "☁ Cloud   🔍 Search   👤 Profile   ❤ Like   📁 Playlist   ▶ Play";
+        inline_examples = "☁ Cloud   🔍 Search   👤 Profile   💖 Like   📁 Playlist   ▶ Play";
     } else if (icon_style_idx_ == 1) {
         inline_examples = "☁ Cloud   ⌕ Search   ☺ Profile   ♥ Like   ≡ Playlist   ▶ Play";
     } else {
@@ -671,7 +692,33 @@ Element OnboardingView::render_step2_appearance() {
         effective_proto = core::CoverArtProcessor::detect_terminal_graphics_protocol();
     }
 
-    if (preview_image_ && image_protocol_idx_ != 4) {
+    if (image_protocol_idx_ == 4) { // Disabled mode
+        core::CoverArtProcessor::clear_terminal_image(888);
+        preview_drawn_in_terminal_ = false;
+        cover_preview_element = vbox({
+            filler(),
+            text("[ Artwork ]") | color(Color::GrayDark) | center,
+            text("[ Disabled ]") | color(Color::GrayDark) | center,
+            filler()
+        }) | size(WIDTH, EQUAL, 18) | size(HEIGHT, EQUAL, 9) | border | color(Color::GrayDark);
+    } else if (image_protocol_idx_ == 3) { // Half-block pixelated
+        if (preview_drawn_in_terminal_) {
+            core::CoverArtProcessor::clear_terminal_image(888);
+            preview_drawn_in_terminal_ = false;
+        }
+        if (preview_image_) {
+            cover_preview_element = core::CoverArtProcessor::render_cover_element(
+                *preview_image_,
+                core::ImageProtocol::HalfBlock,
+                888,
+                18,
+                9
+            );
+        } else {
+            cover_preview_element = core::CoverArtProcessor::render_placeholder(18, 9, state_.accent_color);
+        }
+    } else if (preview_image_) {
+        preview_drawn_in_terminal_ = true;
         cover_preview_element = core::CoverArtProcessor::render_cover_element(
             *preview_image_,
             effective_proto,
@@ -679,27 +726,41 @@ Element OnboardingView::render_step2_appearance() {
             18,
             9
         );
-    } else if (image_protocol_idx_ == 4) {
-        cover_preview_element = vbox({
-            filler(),
-            text("[ Artwork Disabled ]") | color(Color::GrayDark) | center,
-            filler()
-        }) | size(WIDTH, EQUAL, 18) | size(HEIGHT, EQUAL, 9) | border | color(Color::GrayDark);
     } else {
         cover_preview_element = core::CoverArtProcessor::render_placeholder(18, 9, state_.accent_color);
     }
 
-    std::string proto_desc;
+    std::vector<std::string> proto_desc_lines;
     if (image_protocol_idx_ == 0) {
-        proto_desc = "Auto-detects terminal capability (Kitty, Ghostty, WezTerm, iTerm2, or Unicode fallback).";
+        proto_desc_lines = {
+            "Auto-detects terminal capability",
+            "(Kitty, Ghostty, WezTerm, iTerm2, or Unicode fallback)."
+        };
     } else if (image_protocol_idx_ == 1) {
-        proto_desc = "Sends 24-bit TrueColor PNG image payload directly to terminal GPU canvas.";
+        proto_desc_lines = {
+            "Sends 24-bit TrueColor PNG image payload",
+            "directly to terminal GPU canvas."
+        };
     } else if (image_protocol_idx_ == 2) {
-        proto_desc = "OSC 1337 protocol for iTerm2, WezTerm, and compatible terminals.";
+        proto_desc_lines = {
+            "OSC 1337 protocol for iTerm2, WezTerm,",
+            "and compatible terminals."
+        };
     } else if (image_protocol_idx_ == 3) {
-        proto_desc = "Universal 2-pixel-per-cell ANSI 24-bit half-blocks. 100% compatible with all terminals.";
+        proto_desc_lines = {
+            "Universal 2-pixel-per-cell ANSI 24-bit",
+            "half-blocks. 100% compatible with all terminals."
+        };
     } else {
-        proto_desc = "No artwork will be rendered in player or fullscreen modes.";
+        proto_desc_lines = {
+            "No artwork will be rendered in player",
+            "or fullscreen modes."
+        };
+    }
+
+    Elements desc_elements;
+    for (const auto& line : proto_desc_lines) {
+        desc_elements.push_back(text(line) | color(Color::GrayLight));
     }
 
     auto proto_card = vbox({
@@ -717,9 +778,10 @@ Element OnboardingView::render_step2_appearance() {
                 text("Fixture: Sindrom Sobstvennika (shquus)") | color(Color::GrayDark),
                 text(""),
                 text("Rendering Mode: " + std::string(protos[std::clamp(image_protocol_idx_, 0, 4)])) | color(accent),
-                text(proto_desc) | color(Color::GrayLight),
+                vbox(std::move(desc_elements)),
                 text(""),
-                text("Supports standard window resizing and dynamic color extraction.") | color(Color::GrayDark)
+                text("Supports standard window resizing and") | color(Color::GrayDark),
+                text("dynamic accent color extraction.") | color(Color::GrayDark)
             }) | xflex
         })
     }) | borderRounded | color(selected_field_ == 1 ? accent : Color::RGB(60, 60, 75)) | bgcolor(Color::RGB(16, 16, 22)) | size(WIDTH, LESS_THAN, 82);
@@ -749,6 +811,8 @@ Element OnboardingView::render_step2_appearance() {
 }
 
 Element OnboardingView::render_step3_engine() {
+    core::CoverArtProcessor::clear_terminal_image(888);
+    preview_drawn_in_terminal_ = false;
     auto accent = state_.get_accent_color();
     clickable_zones_.clear();
 

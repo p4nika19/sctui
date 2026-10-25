@@ -34,6 +34,8 @@ namespace sctui::audio {
 struct AudioEngine::Impl {
     ma_device device;
     ma_decoder decoder;
+    std::mutex decoder_mutex;
+    std::atomic<int> seek_fade_frames{0};
     bool device_initialized{false};
     bool decoder_initialized{false};
 
@@ -109,9 +111,12 @@ struct AudioEngine::Impl {
             device_initialized = false;
         }
 
-        if (decoder_initialized) {
-            ma_decoder_uninit(&decoder);
-            decoder_initialized = false;
+        {
+            std::lock_guard<std::mutex> lock(decoder_mutex);
+            if (decoder_initialized) {
+                ma_decoder_uninit(&decoder);
+                decoder_initialized = false;
+            }
         }
 
         state.store(PlaybackState::Stopped, std::memory_order_relaxed);
@@ -138,6 +143,12 @@ struct AudioEngine::Impl {
             return;
         }
 
+        std::unique_lock<std::mutex> lock(self->decoder_mutex, std::try_to_lock);
+        if (!lock.owns_lock()) {
+            std::memset(pOutput, 0, frameCount * sizeof(float) * 2);
+            return;
+        }
+
         if (!self->decoder_initialized || self->state.load(std::memory_order_relaxed) != PlaybackState::Playing) {
             std::memset(pOutput, 0, frameCount * sizeof(float) * 2);
             for (size_t b = 0; b < VisualizerBandsCount; ++b) {
@@ -161,6 +172,25 @@ struct AudioEngine::Impl {
         if (result != MA_SUCCESS && result != MA_AT_END) {
             std::memset(pOutput, 0, frameCount * sizeof(float) * 2);
             return;
+        }
+
+        // Anti-scratch smooth crossfade on seeking
+        int fade_left = self->seek_fade_frames.load(std::memory_order_relaxed);
+        if (fade_left > 0 && frames_read > 0) {
+            constexpr int kTotalFade = 384;
+            for (ma_uint64 i = 0; i < frames_read; ++i) {
+                if (fade_left > 0) {
+                    float ramp = 1.0f - static_cast<float>(fade_left) / static_cast<float>(kTotalFade);
+                    ramp = std::sin(ramp * 1.5707963f);
+                    ramp *= ramp;
+                    out_buffer[i * 2] *= ramp;
+                    out_buffer[i * 2 + 1] *= ramp;
+                    fade_left--;
+                } else {
+                    break;
+                }
+            }
+            self->seek_fade_frames.store(fade_left, std::memory_order_relaxed);
         }
 
         // Check if playback needs buffering
@@ -257,9 +287,12 @@ struct AudioEngine::Impl {
             download_worker.join();
         }
 
-        if (decoder_initialized) {
-            ma_decoder_uninit(&decoder);
-            decoder_initialized = false;
+        {
+            std::lock_guard<std::mutex> lock(decoder_mutex);
+            if (decoder_initialized) {
+                ma_decoder_uninit(&decoder);
+                decoder_initialized = false;
+            }
         }
 
         if (cmd.is_drm) {
@@ -601,6 +634,7 @@ struct AudioEngine::Impl {
     }
 
     void handle_seek(int64_t delta_ms) {
+        std::lock_guard<std::mutex> lock(decoder_mutex);
         if (!decoder_initialized) return;
 
         ma_uint64 cursor_frames = 0;
@@ -616,14 +650,17 @@ struct AudioEngine::Impl {
         ma_uint64 target_frame = static_cast<ma_uint64>((target_ms * 48000) / 1000);
         ma_decoder_seek_to_pcm_frame(&decoder, target_frame);
         position_ms.store(static_cast<uint64_t>(target_ms), std::memory_order_relaxed);
+        seek_fade_frames.store(384, std::memory_order_relaxed);
     }
 
     void handle_seek_absolute(uint64_t target_ms) {
+        std::lock_guard<std::mutex> lock(decoder_mutex);
         if (!decoder_initialized) return;
 
         ma_uint64 target_frame = (target_ms * 48000) / 1000;
         ma_decoder_seek_to_pcm_frame(&decoder, target_frame);
         position_ms.store(target_ms, std::memory_order_relaxed);
+        seek_fade_frames.store(384, std::memory_order_relaxed);
     }
 };
 
