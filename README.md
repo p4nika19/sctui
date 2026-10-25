@@ -68,6 +68,14 @@ Once finished, launch the app from any terminal with:
 sctui
 ```
 
+### Complete Uninstallation
+To cleanly and completely remove `sctui` from your system (including binary executables, background DRM satellite, cache, and configuration):
+
+```bash
+./uninstall.sh
+```
+Use `./uninstall.sh -y` to skip the interactive confirmation prompt, or `./uninstall.sh --keep-config` to preserve your preferences and likes.
+
 ---
 
 ## 🛠️ Manual Building & Running
