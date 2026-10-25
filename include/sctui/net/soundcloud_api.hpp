@@ -70,6 +70,7 @@ public:
     );
 
     core::Result<std::vector<models::Track>> get_playlist_tracks(uint64_t playlist_id);
+    core::Result<models::Track> get_track_details(uint64_t track_id);
 
     core::Result<uint64_t> resolve_user_id();
     core::Result<models::UserProfile> get_me();

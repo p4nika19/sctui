@@ -60,7 +60,7 @@ private:
 
     std::atomic<bool> is_running_{false};
     std::atomic<bool> is_ready_{false};
-    std::atomic<float> current_volume_{0.5f};
+    std::atomic<float> current_volume_{0.2176f};
 
     mutable std::mutex state_mutex_;
     DrmSatelliteState state_;

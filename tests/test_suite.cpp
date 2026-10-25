@@ -105,7 +105,28 @@ void test_user_library() {
     auto pl_tracks_res = api.get_playlist_tracks(pl.id);
     REQUIRE(pl_tracks_res.has_value());
     std::cout << "  -> Playlist resolved with " << pl_tracks_res->size() << " fully articulated tracks!" << std::endl;
+    for (size_t i = 0; i < std::min<size_t>(5, pl_tracks_res->size()); ++i) {
+        const auto& t = (*pl_tracks_res)[i];
+        std::cout << "     Track " << i << ": id=" << t.id << " '" << t.title << "' transcodings=" << t.transcodings.size() << " access=" << static_cast<int>(t.access_type) << std::endl;
+    }
     REQUIRE(pl_tracks_res->size() >= pl.track_count || pl_tracks_res->size() > 5);
+
+    // Test on-demand track details fetch and fallback for stub/empty transcodings
+    std::cout << "  -> Testing on-demand track details fallback for track 2063744096..." << std::endl;
+    auto detail_res = api.get_track_details(2063744096);
+    REQUIRE(detail_res.has_value());
+    REQUIRE(!detail_res->transcodings.empty());
+    REQUIRE(detail_res->title.find("relivemystress") != std::string::npos);
+    std::cout << "  -> Track details fetched successfully: '" << detail_res->title << "' (" << detail_res->transcodings.size() << " transcodings)" << std::endl;
+
+    // Test resolving stream URL when track starts with EMPTY transcodings (automatic fetch)
+    sctui::models::Track stub_track;
+    stub_track.id = 2063744096;
+    stub_track.title = "relivemystress (stub)";
+    auto auto_resolve = api.resolve_stream_url(stub_track, true);
+    REQUIRE(auto_resolve.has_value());
+    REQUIRE(auto_resolve->find("license_token=") != std::string::npos);
+    std::cout << "  -> Stream resolved seamlessly from stub track with auto-fetch OK!" << std::endl;
 }
 
 void test_entropy_shuffle() {
@@ -222,6 +243,7 @@ void test_mpris_server() {
     track.title = "Solaris";
     track.artist = "Photay";
     track.duration_ms = 210000;
+    track.artwork_url = "https://i1.sndcdn.com/artworks-000508605387-v900l7-large.jpg";
     track.permalink_url = "https://soundcloud.com/photay/solaris";
 
     server.update_track(track);
@@ -256,6 +278,18 @@ void test_mpris_server() {
         std::this_thread::sleep_for(std::chrono::milliseconds(50));
         REQUIRE(prev_invoked);
         std::cout << "  -> playerctl previous command executed without deadlock/freeze OK" << std::endl;
+
+        std::string art_cmd = "playerctl -p " + player_name + " metadata mpris:artUrl 2>/dev/null";
+        FILE* pipe = popen(art_cmd.c_str(), "r");
+        if (pipe) {
+            char buf[256];
+            if (fgets(buf, sizeof(buf), pipe)) {
+                std::string art_out = buf;
+                REQUIRE(art_out.find("-t500x500.jpg") != std::string::npos);
+                std::cout << "  -> playerctl mpris:artUrl high-res 500x500 verified OK" << std::endl;
+            }
+            pclose(pipe);
+        }
     } else {
         std::cout << "  -> MPRIS server registered successfully on session D-Bus" << std::endl;
     }
@@ -838,6 +872,60 @@ void test_dynamic_queue_append_and_shuffle() {
     std::cout << "  -> Dynamic queue extension preserved current track and shuffled all 15 tracks OK" << std::endl;
 }
 
+void test_queue_next_and_reorder() {
+    std::cout << "[Test] Running Queue Next & Move Track To Next verification..." << std::endl;
+
+    sctui::models::QueueState queue;
+    for (size_t i = 0; i < 4; ++i) {
+        sctui::models::Track t;
+        t.id = 200 + i;
+        t.title = "Song " + std::to_string(i);
+        queue.tracks.push_back(t);
+    }
+    queue.current_index = 0; // Song 0 playing
+
+    // Test queue_track(play_next = true)
+    sctui::models::Track next_track;
+    next_track.id = 999;
+    next_track.title = "Immediate Next Track";
+    queue.queue_track(next_track, true);
+
+    REQUIRE(queue.tracks.size() == 5);
+    REQUIRE(queue.tracks[1].id == 999); // Inserted at current_index + 1
+    REQUIRE(queue.current_index == 0);
+
+    // Test move_to_next: move Song 3 (at index 4) to position 1
+    bool moved = queue.move_to_next(4);
+    REQUIRE(moved);
+    REQUIRE(queue.tracks[1].id == 203); // Song 3 is now at index 1 (next to play)
+
+    // Test in shuffle mode
+    queue.shuffle = true;
+    queue.rebuild_shuffle();
+    REQUIRE(queue.shuffle_indices[0] == 0); // Currently playing song at cursor 0
+
+    sctui::models::Track shuf_next;
+    shuf_next.id = 777;
+    shuf_next.title = "Shuffle Next Track";
+    queue.queue_track(shuf_next, true);
+
+    REQUIRE(queue.tracks.size() == 6);
+    REQUIRE(queue.shuffle_indices.size() == 6);
+    // Track 777 should be at shuffle_cursor + 1
+    size_t next_idx = queue.shuffle_indices[queue.shuffle_cursor + 1];
+    REQUIRE(queue.tracks[next_idx].id == 777);
+
+    // Test move_to_next in shuffle mode
+    size_t last_shuf_pos = queue.shuffle_indices.size() - 1;
+    uint64_t target_id = queue.tracks[queue.shuffle_indices[last_shuf_pos]].id;
+    bool shuf_moved = queue.move_to_next(static_cast<int>(last_shuf_pos));
+    REQUIRE(shuf_moved);
+    size_t new_next_idx = queue.shuffle_indices[queue.shuffle_cursor + 1];
+    REQUIRE(queue.tracks[new_next_idx].id == target_id);
+
+    std::cout << "  -> Queue Next insertion and Move To Next (normal & shuffle) OK" << std::endl;
+}
+
 void test_volume_150_and_visualizer_curve() {
     std::cout << "[Test] Running Volume 150% & Visualizer Sensitivity Diminishing Returns curve..." << std::endl;
 
@@ -1032,6 +1120,7 @@ int main() {
     test_queue_alignment();
     test_entropy_shuffle();
     test_dynamic_queue_append_and_shuffle();
+    test_queue_next_and_reorder();
     test_volume_150_and_visualizer_curve();
     test_mouse_control_option();
     test_settings_and_mouse_coordinate_mapping();

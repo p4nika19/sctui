@@ -87,6 +87,8 @@ private:
     void submit_load_playlist(models::Playlist playlist);
     void submit_fetch_waveform(const models::Track& track);
     void submit_toggle_like(models::Track track);
+    void queue_selected_track(bool play_next);
+    [[nodiscard]] bool is_editing_settings_text() const;
     void play_next_track();
     void play_previous_track();
     void apply_network_settings();
@@ -133,6 +135,7 @@ private:
     std::atomic<bool> is_running_{true};
     core::ThreadPool thread_pool_{6};
     std::atomic<uint64_t> likes_fetch_generation_{0};
+    std::atomic<uint64_t> play_generation_{0};
     std::jthread worker_thread_;
     std::jthread telemetry_thread_;
     std::string last_search_query_;

@@ -138,13 +138,18 @@ struct AudioEngine::Impl {
             return;
         }
 
-        if (!self->decoder_initialized) {
+        if (!self->decoder_initialized || self->state.load(std::memory_order_relaxed) != PlaybackState::Playing) {
             std::memset(pOutput, 0, frameCount * sizeof(float) * 2);
-            return;
-        }
-
-        if (self->state.load(std::memory_order_relaxed) != PlaybackState::Playing) {
-            std::memset(pOutput, 0, frameCount * sizeof(float) * 2);
+            for (size_t b = 0; b < VisualizerBandsCount; ++b) {
+                float old_val = self->visualizer_bands[b].load(std::memory_order_relaxed);
+                if (old_val > 0.001f) {
+                    self->visualizer_bands[b].store(old_val * 0.82f, std::memory_order_relaxed);
+                } else {
+                    self->visualizer_bands[b].store(0.0f, std::memory_order_relaxed);
+                }
+            }
+            self->rms_left.store(0.0f, std::memory_order_relaxed);
+            self->rms_right.store(0.0f, std::memory_order_relaxed);
             return;
         }
 

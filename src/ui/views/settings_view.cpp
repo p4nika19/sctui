@@ -57,7 +57,7 @@ SettingsView::SettingsView(
             return true;
         }
 
-        constexpr int kTotalFields = 19;
+        constexpr int kTotalFields = 20;
 
         // Dedicated text editing mode for URL / IP text input fields
         if (is_editing_text()) {
@@ -228,6 +228,10 @@ SettingsView::SettingsView(
                 download_drm_tracks_in_likes_ = !download_drm_tracks_in_likes_;
                 return true;
             }
+            if (selected_field_ == 18) { // Fullscreen Visualizer Mirrored
+                fullscreen_visualizer_mirrored_ = !fullscreen_visualizer_mirrored_;
+                return true;
+            }
             if (selected_field_ != 6 && selected_field_ != 7) {
                 state_.focused_panel = models::FocusPanel::Sidebar;
                 return true;
@@ -370,7 +374,11 @@ SettingsView::SettingsView(
                 download_drm_tracks_in_likes_ = !download_drm_tracks_in_likes_;
                 return true;
             }
-            if (selected_field_ == 18) { // Save & Apply
+            if (selected_field_ == 18) { // Fullscreen Visualizer Mirrored
+                fullscreen_visualizer_mirrored_ = !fullscreen_visualizer_mirrored_;
+                return true;
+            }
+            if (selected_field_ == 19) { // Save & Apply
                 config_.image_protocol = static_cast<core::ImageProtocol>(image_protocol_idx_);
                 config_.icon_style = static_cast<core::IconStyle>(icon_style_idx_);
                 state_.icon_style = config_.icon_style;
@@ -387,6 +395,7 @@ SettingsView::SettingsView(
                 config_.mouse_control = mouse_control_;
                 config_.drm_engine_enabled = drm_engine_enabled_;
                 config_.download_drm_tracks_in_likes = download_drm_tracks_in_likes_;
+                config_.fullscreen_visualizer_mirrored = fullscreen_visualizer_mirrored_;
                 state_.drm_engine_enabled = drm_engine_enabled_;
                 state_.download_drm_tracks_in_likes = download_drm_tracks_in_likes_;
 
@@ -435,6 +444,7 @@ void SettingsView::reload_from_config() {
     mouse_control_ = config_.mouse_control;
     drm_engine_enabled_ = config_.drm_engine_enabled;
     download_drm_tracks_in_likes_ = config_.download_drm_tracks_in_likes;
+    fullscreen_visualizer_mirrored_ = config_.fullscreen_visualizer_mirrored;
 }
 
 bool SettingsView::is_editing_text() const {
@@ -567,7 +577,11 @@ bool SettingsView::handle_mouse_click(int y, int x) {
         download_drm_tracks_in_likes_ = !download_drm_tracks_in_likes_;
         return true;
     }
-    if (field == 18) { // Apply Changes
+    if (field == 18) { // Fullscreen Visualizer Mirrored
+        fullscreen_visualizer_mirrored_ = !fullscreen_visualizer_mirrored_;
+        return true;
+    }
+    if (field == 19) { // Apply Changes
         config_.image_protocol = static_cast<core::ImageProtocol>(image_protocol_idx_);
         config_.icon_style = static_cast<core::IconStyle>(icon_style_idx_);
         state_.icon_style = config_.icon_style;
@@ -584,6 +598,7 @@ bool SettingsView::handle_mouse_click(int y, int x) {
         config_.mouse_control = mouse_control_;
         config_.drm_engine_enabled = drm_engine_enabled_;
         config_.download_drm_tracks_in_likes = download_drm_tracks_in_likes_;
+        config_.fullscreen_visualizer_mirrored = fullscreen_visualizer_mirrored_;
         state_.drm_engine_enabled = drm_engine_enabled_;
         state_.download_drm_tracks_in_likes = download_drm_tracks_in_likes_;
 
@@ -838,9 +853,13 @@ Element SettingsView::render(bool is_focused) {
     auto drm_download_elem = text(download_drm_tracks_in_likes_ ? "< Enabled (Non-GO tracks) >" : "< Disabled >")
         | (selected_field_ == 17 && is_focused ? color(accent) | bold : color(download_drm_tracks_in_likes_ ? Color::GreenLight : Color::GrayLight));
 
-    // 18. Save & Apply button
+    // 18. Fullscreen Visualizer Mirrored
+    auto vis_style_elem = text(fullscreen_visualizer_mirrored_ ? "< Centered & Mirrored >" : "< Stretched (Full Width) >")
+        | (selected_field_ == 18 && is_focused ? color(accent) | bold : color(fullscreen_visualizer_mirrored_ ? Color::CyanLight : Color::White));
+
+    // 19. Save & Apply button
     auto btn_save = text(" [ " + sym.save + " Save & Apply Settings ] ")
-        | (selected_field_ == 18 && is_focused ? bgcolor(accent) | color(Color::Black) | bold : bgcolor(Color::RGB(30, 30, 35)) | color(accent) | bold);
+        | (selected_field_ == 19 && is_focused ? bgcolor(accent) | color(Color::Black) | bold : bgcolor(Color::RGB(30, 30, 35)) | color(accent) | bold);
 
     // Header Title
     content.push_back(hbox({
@@ -873,6 +892,7 @@ Element SettingsView::render(bool is_focused) {
     content.push_back(text(" " + sym.graphics + "  TERMINAL COVER ART & ICONS ") | color(Color::White) | bold);
     content.push_back(render_row(2, "Cover Art Protocol", proto_elem, "(Terminal detects: " + detected_proto_str + ")"));
     content.push_back(render_row(3, "Icon & Symbols Style", icon_style_elem, "Replace emojis with Unicode or Default ASCII symbols"));
+    content.push_back(render_row(18, "Fullscreen Visualizer", vis_style_elem, "Mirrored extends from center to edges, or stretched full width"));
     content.push_back(hbox({
         text("   Cover Art Option:       ") | color(Color::GrayDark),
         text("Choose 'Pixelated (Unicode Half-Block 24-bit)' to manually force pixelated cover even on Kitty/Ghostty/iTerm2.") | color(Color::GrayDark)
@@ -918,7 +938,7 @@ Element SettingsView::render(bool is_focused) {
     content.push_back(text(""));
 
     // Section: Save & Apply
-    content.push_back(render_row(18, "Apply Changes", btn_save));
+    content.push_back(render_row(19, "Apply Changes", btn_save));
     if (!feedback_message_.empty()) {
         content.push_back(text(""));
         content.push_back(hbox({

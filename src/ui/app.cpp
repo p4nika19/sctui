@@ -199,12 +199,12 @@ void App::init_ui() {
             submit_play_track(track);
         },
         [this](const models::Track& track, bool play_next) {
-            if (play_next && state_.queue.current_index >= 0 && state_.queue.current_index + 1 <= static_cast<int>(state_.queue.tracks.size())) {
-                state_.queue.tracks.insert(state_.queue.tracks.begin() + state_.queue.current_index + 1, track);
+            state_.queue.queue_track(track, play_next);
+            if (play_next) {
+                state_.notify("Queued next: " + core::truncate_string(track.title, 25));
             } else {
-                state_.queue.tracks.push_back(track);
+                state_.notify("Added to queue: " + core::truncate_string(track.title, 25));
             }
-            state_.notify("Added to queue: " + core::truncate_string(track.title, 25));
         },
         [this](const models::Track& track) {
             submit_toggle_like(track);
@@ -235,12 +235,12 @@ void App::init_ui() {
             submit_play_track(track);
         },
         [this](const models::Track& track, bool play_next) {
-            if (play_next && state_.queue.current_index >= 0 && state_.queue.current_index + 1 <= static_cast<int>(state_.queue.tracks.size())) {
-                state_.queue.tracks.insert(state_.queue.tracks.begin() + state_.queue.current_index + 1, track);
+            state_.queue.queue_track(track, play_next);
+            if (play_next) {
+                state_.notify("Queued next: " + core::truncate_string(track.title, 25));
             } else {
-                state_.queue.tracks.push_back(track);
+                state_.notify("Added to queue: " + core::truncate_string(track.title, 25));
             }
-            state_.notify("Added to queue: " + core::truncate_string(track.title, 25));
         },
         [this](const models::Track& track) {
             submit_toggle_like(track);
@@ -335,7 +335,6 @@ void App::init_ui() {
                 core::CoverArtProcessor::clear_terminal_image(2);
                 avatar_drawn_in_terminal_ = false;
             }
-            fullscreen_cover_drawn_ = true;
             return render_fullscreen_playback();
         }
 
@@ -634,6 +633,23 @@ void App::init_ui() {
             return true;
         }
 
+        // Global Queue insertion ('A' or Ctrl+N to move/insert track to next in queue from any tab)
+        if ((event == Event::Character('A') || event == Event::CtrlN) &&
+            state_.focused_panel != models::FocusPanel::SearchInput &&
+            !is_editing_settings_text()) {
+            queue_selected_track(true);
+            return true;
+        }
+
+        // Add track to end of queue from any tab ('a')
+        if (event == Event::Character('a') &&
+            state_.focused_panel != models::FocusPanel::SearchInput &&
+            !is_editing_settings_text() &&
+            state_.current_view != models::ViewMode::Queue) {
+            queue_selected_track(false);
+            return true;
+        }
+
         // Direct panel event dispatch based on state_.focused_panel
         switch (state_.focused_panel) {
             case models::FocusPanel::Sidebar:
@@ -727,12 +743,12 @@ void App::cycle_focus(bool reverse) {
 }
 
 void App::start_worker_threads() {
-    // 1. High-frequency telemetry update thread (20 Hz)
+    // 1. High-frequency telemetry update thread (60 Hz for buttery smooth visualizer)
     telemetry_thread_ = std::jthread([this](std::stop_token stop_tok) {
         while (!stop_tok.stop_requested() && is_running_) {
             update_telemetry();
             screen_.PostEvent(Event::Custom);
-            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+            std::this_thread::sleep_for(std::chrono::milliseconds(16));
         }
     });
 }
@@ -760,7 +776,17 @@ void App::update_telemetry() {
     state_.position_ms = audio_.get_position_ms();
     state_.duration_ms = audio_.get_duration_ms();
     state_.buffer_percent = audio_.get_buffer_percent();
-    state_.visualizer_bars = audio_.get_visualizer_bands();
+
+    auto raw_bars = audio_.get_visualizer_bands();
+    if (state_.is_loading || state_.playback_state != audio::PlaybackState::Playing) {
+        // Smoothly decay visualizer bars to zero while next track is loading or playback is stopped
+        for (size_t i = 0; i < audio::VisualizerBandsCount; ++i) {
+            float decayed = state_.visualizer_bars[i] * 0.82f;
+            state_.visualizer_bars[i] = (decayed < 0.002f) ? 0.0f : decayed;
+        }
+    } else {
+        state_.visualizer_bars = raw_bars;
+    }
 
     if (mpris_server_) {
         mpris_server_->update_playback_state(state_.playback_state);
@@ -1192,6 +1218,8 @@ void App::submit_load_playlist(models::Playlist playlist) {
 }
 
 void App::submit_play_track(models::Track track) {
+    uint64_t current_gen = ++play_generation_;
+
     if (track.is_drm_protected() && !state_.drm_engine_enabled) {
         state_.notify("[DRM Protected] '" + core::truncate_string(track.title, 25) + "' is DRM-protected: skipping (enable DRM in settings)", true, 4);
         LOG_WARN("App", "Track " + std::to_string(track.id) + " is DRM-protected: auto-skipping");
@@ -1206,13 +1234,15 @@ void App::submit_play_track(models::Track track) {
     state_.active_track = track;
     state_.is_loading = true;
     if (mpris_server_) {
-        mpris_server_->update_track(track);
+        models::Track mpris_trk = track;
+        mpris_trk.artwork_url = core::CoverArtProcessor::upgrade_artwork_url(track.artwork_url);
+        mpris_server_->update_track(mpris_trk);
     }
     if (discord_rpc_) {
         discord_rpc_->update_presence(track, audio::PlaybackState::Playing, 0, track.duration_ms);
     }
 
-    LOG_INFO("App", "Play track requested: " + std::to_string(track.id) + " ('" + track.title + "') by " + track.artist);
+    LOG_INFO("App", "Play track requested (gen " + std::to_string(current_gen) + "): " + std::to_string(track.id) + " ('" + track.title + "') by " + track.artist);
 
     // If queue doesn't contain track, add it
     bool in_queue = false;
@@ -1228,13 +1258,20 @@ void App::submit_play_track(models::Track track) {
         state_.queue.set_current_index(static_cast<int>(state_.queue.tracks.size() - 1));
     }
 
+    // Reset current cover art for new song and immediately clear previous terminal images
+    state_.current_cover_art.reset();
+    state_.accent_color = {255, 85, 0};
+    core::CoverArtProcessor::clear_terminal_image(1);
+    core::CoverArtProcessor::clear_terminal_image(3);
+    fullscreen_cover_drawn_ = false;
+
     // Asynchronously fetch cover art & extract dynamic accent color
     uint64_t track_id = track.id;
     std::string artwork_url = track.artwork_url;
 
     if (!artwork_url.empty()) {
-        thread_pool_.enqueue([this, track_id, artwork_url]() {
-            if (!is_running_) return;
+        thread_pool_.enqueue([this, track_id, artwork_url, current_gen]() {
+            if (!is_running_ || play_generation_.load() != current_gen) return;
             std::string high_res_url = core::CoverArtProcessor::upgrade_artwork_url(artwork_url);
             net::HttpClient client;
             client.set_timeout_seconds(5);
@@ -1248,7 +1285,7 @@ void App::submit_play_track(models::Track track) {
                 }
             }
 
-            if (!is_running_) return;
+            if (!is_running_ || play_generation_.load() != current_gen) return;
 
             if (res && res->is_2xx()) {
                 auto decoded = core::CoverArtProcessor::decode_and_resize(
@@ -1256,14 +1293,14 @@ void App::submit_play_track(models::Track track) {
                     res->body.size(),
                     18, 18
                 );
-                if (decoded && is_running_) {
+                if (decoded && is_running_ && play_generation_.load() == current_gen) {
                     auto dominant = core::CoverArtProcessor::extract_dominant_color(*decoded);
                     LOG_INFO("App", "Artwork processed successfully for track " + std::to_string(track_id) +
                                     ". Dominant accent color: RGB(" + std::to_string(dominant.r) + ", " +
                                     std::to_string(dominant.g) + ", " + std::to_string(dominant.b) + ")");
                     ui_event_channel_.push(AsyncUIEvent{
                         .type = AsyncEventType::CoverArtReady,
-                        .numeric_payload = track_id,
+                        .numeric_payload = current_gen,
                         .cover_art_payload = std::move(*decoded),
                         .accent_color_payload = dominant
                     });
@@ -1273,31 +1310,33 @@ void App::submit_play_track(models::Track track) {
             }
             LOG_WARN("App", "Failed to fetch or decode artwork for track " + std::to_string(track_id));
         });
-    } else {
-        state_.current_cover_art.reset();
-        state_.accent_color = {255, 85, 0};
     }
 
-    thread_pool_.enqueue([this, track]() {
-        if (!is_running_) return;
+    thread_pool_.enqueue([this, track, current_gen]() {
+        if (!is_running_ || play_generation_.load() != current_gen) return;
         auto res = api_.resolve_stream_url(track, state_.drm_engine_enabled);
-        if (!is_running_) return;
+        if (!is_running_ || play_generation_.load() != current_gen) return;
         if (res) {
             audio_.play(*res, track.id, track.duration_ms, track.is_drm_protected());
             if (cache_manager_) {
                 cache_manager_->register_track(track);
             }
+            std::vector<models::Track> tp;
+            tp.push_back(track);
             ui_event_channel_.push(AsyncUIEvent{
                 .type = AsyncEventType::StreamResolvedAndPlay,
                 .text_payload = *res,
-                .numeric_payload = track.id
+                .tracks_payload = std::move(tp),
+                .numeric_payload = current_gen
             });
         } else {
-            LOG_ERROR("App", "Stream resolution failed for track " + std::to_string(track.id) + " ('" + track.title + "'): " + res.error().message);
-            ui_event_channel_.push(AsyncUIEvent{
-                .type = AsyncEventType::ErrorMessage,
-                .text_payload = "Playback error: " + res.error().message
-            });
+            if (play_generation_.load() == current_gen) {
+                LOG_ERROR("App", "Stream resolution failed for track " + std::to_string(track.id) + " ('" + track.title + "'): " + res.error().message);
+                ui_event_channel_.push(AsyncUIEvent{
+                    .type = AsyncEventType::ErrorMessage,
+                    .text_payload = "Playback error: " + res.error().message
+                });
+            }
         }
         screen_.PostEvent(Event::Custom);
     });
@@ -1683,7 +1722,20 @@ void App::process_async_events() {
                 state_.playlist_tracks_selected_index = 0;
                 break;
             case AsyncEventType::StreamResolvedAndPlay:
-                state_.notify("Now playing: " + core::truncate_string(state_.active_track ? state_.active_track->title : "", 30));
+                if (play_generation_.load() == evt.numeric_payload) {
+                    if (!evt.tracks_payload.empty()) {
+                        state_.active_track = evt.tracks_payload.front();
+                    }
+                    if (mpris_server_ && state_.active_track) {
+                        models::Track mpris_trk = *state_.active_track;
+                        mpris_trk.artwork_url = core::CoverArtProcessor::upgrade_artwork_url(state_.active_track->artwork_url);
+                        mpris_server_->update_track(mpris_trk);
+                    }
+                    if (discord_rpc_ && state_.active_track) {
+                        discord_rpc_->update_presence(state_.active_track, audio::PlaybackState::Playing, 0, state_.active_track->duration_ms);
+                    }
+                    state_.notify("Now playing: " + core::truncate_string(state_.active_track ? state_.active_track->title : "", 30));
+                }
                 break;
             case AsyncEventType::TrackFinished:
                 handle_track_finished(evt.numeric_payload);
@@ -1694,7 +1746,7 @@ void App::process_async_events() {
                 }
                 break;
             case AsyncEventType::CoverArtReady:
-                if (state_.active_track && state_.active_track->id == evt.numeric_payload) {
+                if (play_generation_.load() == evt.numeric_payload) {
                     state_.current_cover_art = std::move(evt.cover_art_payload);
                     state_.accent_color = evt.accent_color_payload;
                 }
@@ -2136,21 +2188,36 @@ Element App::render_fullscreen_playback() {
            color(state_.notification->is_error ? Color::RedLight : Color::Yellow) | bold)
         : (text("FULLSCREEN PLAYBACK") | color(Color::GrayDark) | bold);
 
+    int side_w = 18;
+    auto left_elem = hbox({ text(" SCTUI ") | bold | color(accent), filler() }) | size(WIDTH, EQUAL, side_w);
+    auto right_elem = hbox({ filler(), text("[ESC / F] Exit  ") | color(Color::GrayLight) }) | size(WIDTH, EQUAL, side_w);
+
     auto top_bar = hbox({
-        text(" SCTUI ") | bold | color(accent),
+        left_elem,
         filler(),
         notif_elem,
         filler(),
-        text("[ESC / F] Exit  ") | color(Color::GrayLight)
+        right_elem
     });
 
-    // 1. Visualizer stretched along the entire bottom edge (all columns 0 to w - 1)
+    // 1. Visualizer stretched or centered-mirrored along the bottom edge
     static const char* block_levels[] = {" ", " ", "▂", "▃", "▄", "▅", "▆", "▇", "█"};
     int total_levels = vis_h * 8;
 
     std::vector<int> col_levels(static_cast<size_t>(w), 0);
     for (int x = 0; x < w; ++x) {
-        float norm_x = (w > 1) ? (static_cast<float>(x) / static_cast<float>(w - 1)) : 0.0f;
+        float norm_x = 0.0f;
+        if (config_.fullscreen_visualizer_mirrored) {
+            float mid = (w - 1) / 2.0f;
+            if (mid > 0.0f) {
+                // Symmetrical from center (bass) extending outward to edges
+                float dist_from_center = std::abs(static_cast<float>(x) - mid) / mid;
+                norm_x = std::clamp(dist_from_center, 0.0f, 1.0f);
+            }
+        } else {
+            norm_x = (w > 1) ? (static_cast<float>(x) / static_cast<float>(w - 1)) : 0.0f;
+        }
+
         float band_idx = norm_x * static_cast<float>(audio::VisualizerBandsCount - 1);
         int b0 = static_cast<int>(band_idx);
         int b1 = std::min(b0 + 1, static_cast<int>(audio::VisualizerBandsCount - 1));
@@ -2314,7 +2381,12 @@ Element App::render_fullscreen_playback() {
             cover_w,
             cover_h
         );
+        fullscreen_cover_drawn_ = true;
     } else {
+        if (fullscreen_cover_drawn_) {
+            core::CoverArtProcessor::clear_terminal_image(3);
+            fullscreen_cover_drawn_ = false;
+        }
         cover_elem = core::CoverArtProcessor::render_placeholder(
             cover_w,
             cover_h,
@@ -2345,6 +2417,31 @@ Element App::render_fullscreen_playback() {
         upper_section,
         bottom_section
     }) | size(WIDTH, EQUAL, w) | size(HEIGHT, EQUAL, h) | bgcolor(bg);
+}
+
+bool App::is_editing_settings_text() const {
+    return state_.focused_panel == models::FocusPanel::SettingsPanel &&
+           settings_view_ && settings_view_->is_editing_text();
+}
+
+void App::queue_selected_track(bool play_next) {
+    if (state_.current_view == models::ViewMode::Queue) {
+        if (queue_view_) {
+            queue_view_->move_selected_to_next();
+        }
+        return;
+    }
+
+    if (state_.current_view == models::ViewMode::Account) {
+        if (account_view_) {
+            account_view_->queue_selected(play_next);
+        }
+        return;
+    }
+
+    if (track_list_view_) {
+        track_list_view_->queue_selected(play_next);
+    }
 }
 
 } // namespace sctui::ui

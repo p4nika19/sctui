@@ -62,6 +62,9 @@ struct Config {
     // UI Symbols and Icons style
     IconStyle icon_style{IconStyle::Emoji};
 
+    // Fullscreen Visualizer mode (false = Stretched full width (default), true = Centered & mirrored)
+    bool fullscreen_visualizer_mirrored{false};
+
     // Track caching & Liked Locking options
     size_t max_cache_size_mb{1024}; // In megabytes (0 = unlimited)
     bool lock_liked_tracks_in_cache{true}; // Lock/pin liked tracks in cache to prevent eviction

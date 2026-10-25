@@ -71,19 +71,13 @@ AccountView::AccountView(
 
         // Queue selected track
         if (event == Event::Character('a')) {
-            if (on_queue_ && state_.user_tracks_selected_index >= 0 &&
-                static_cast<size_t>(state_.user_tracks_selected_index) < state_.user_tracks.size()) {
-                on_queue_(state_.user_tracks[static_cast<size_t>(state_.user_tracks_selected_index)], false);
-            }
+            queue_selected(false);
             return true;
         }
 
         // Queue next
-        if (event == Event::Character('A')) {
-            if (on_queue_ && state_.user_tracks_selected_index >= 0 &&
-                static_cast<size_t>(state_.user_tracks_selected_index) < state_.user_tracks.size()) {
-                on_queue_(state_.user_tracks[static_cast<size_t>(state_.user_tracks_selected_index)], true);
-            }
+        if (event == Event::Character('A') || event == Event::CtrlN) {
+            queue_selected(true);
             return true;
         }
 
@@ -124,6 +118,13 @@ void AccountView::select_row(int visible_row) {
         if (on_play_) {
             on_play_(state_.user_tracks[static_cast<size_t>(target)], static_cast<size_t>(target));
         }
+    }
+}
+
+void AccountView::queue_selected(bool play_next) {
+    if (on_queue_ && state_.user_tracks_selected_index >= 0 &&
+        static_cast<size_t>(state_.user_tracks_selected_index) < state_.user_tracks.size()) {
+        on_queue_(state_.user_tracks[static_cast<size_t>(state_.user_tracks_selected_index)], play_next);
     }
 }
 

@@ -21,6 +21,8 @@ process.title = 'sctui-drm-satellite';
 app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
 app.commandLine.appendSwitch('disable-features', 'HardwareMediaKeyHandling');
 app.commandLine.appendSwitch('disk-cache-size', String(256 * 1024 * 1024));
+app.commandLine.appendSwitch('disable-background-timer-throttling');
+app.commandLine.appendSwitch('disable-renderer-backgrounding');
 
 // Persistent profile for Widevine CDM keys/certificates
 const defaultProfile = path.join(app.getPath('appData'), 'sctui-satellite');
@@ -68,8 +70,15 @@ process.on('SIGINT', () => cleanupAndExit(0));
 
 function cleanupAndExit(code = 0) {
   try {
+    if (win && !win.isDestroyed()) {
+      win.destroy();
+      win = null;
+    }
+  } catch (e) {}
+  try {
     if (localServer) {
       localServer.close();
+      localServer = null;
     }
   } catch (e) {}
   try {
@@ -81,7 +90,7 @@ function cleanupAndExit(code = 0) {
 let win = null;
 let isPageReady = false;
 let pendingPlay = null;
-let currentVolume = 0.5;
+let currentVolume = 0.2176;
 let localServer = null;
 let localPort = 47823;
 
@@ -285,6 +294,10 @@ app.whenReady().then(async () => {
     skipTaskbar: true,
     hasShadow: false,
     focusable: false,
+    transparent: true,
+    opacity: 0.0,
+    backgroundColor: '#00000000',
+    type: 'utility',
     webPreferences: {
       partition: 'persist:sctui',
       nodeIntegration: false,

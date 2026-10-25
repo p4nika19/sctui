@@ -92,6 +92,9 @@ Result<Config> Config::load(const std::filesystem::path& path) {
         } else if (j.contains("icon_style") && j["icon_style"].is_string()) {
             config.icon_style = string_to_icon_style(j["icon_style"].get<std::string>());
         }
+        if (j.contains("fullscreen_visualizer_mirrored") && j["fullscreen_visualizer_mirrored"].is_boolean()) {
+            config.fullscreen_visualizer_mirrored = j["fullscreen_visualizer_mirrored"].get<bool>();
+        }
         if (j.contains("dns_mode") && j["dns_mode"].is_number_integer()) {
             int d = j["dns_mode"].get<int>();
             config.dns_mode = (d >= 0 && d <= 2) ? static_cast<DnsMode>(d) : DnsMode::System;
@@ -162,6 +165,7 @@ Result<void> Config::save(const std::filesystem::path& path) const {
         j["mouse_control"] = mouse_control;
         j["image_protocol"] = static_cast<int>(image_protocol);
         j["icon_style"] = static_cast<int>(icon_style);
+        j["fullscreen_visualizer_mirrored"] = fullscreen_visualizer_mirrored;
         j["max_cache_size_mb"] = max_cache_size_mb;
         j["lock_liked_tracks_in_cache"] = lock_liked_tracks_in_cache;
         j["dont_count_liked_in_general_cache"] = dont_count_liked_in_general_cache;

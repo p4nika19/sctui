@@ -32,6 +32,7 @@ public:
     void scroll_up();
     void scroll_down();
     void select_row(int visible_row);
+    void queue_selected(bool play_next);
 
 private:
     models::AppState& state_;

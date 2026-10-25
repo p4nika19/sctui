@@ -325,11 +325,14 @@ void DrmSatelliteDaemon::seek(uint64_t position_ms) {
 }
 
 void DrmSatelliteDaemon::set_volume(float volume_percent_0_to_150) {
-    float vol = std::clamp(volume_percent_0_to_150 / 100.0f, 0.0f, 1.0f);
-    current_volume_.store(vol, std::memory_order_relaxed);
+    float norm_vol = std::clamp(volume_percent_0_to_150 / 100.0f, 0.0f, 1.5f);
+    // Apply identical perceptual volume logarithmic curve as miniaudio (gain = norm_vol^2.2)
+    float gain = std::pow(norm_vol, 2.2f);
+    float clamped_gain = std::clamp(gain, 0.0f, 1.0f);
+    current_volume_.store(clamped_gain, std::memory_order_relaxed);
     nlohmann::json cmd;
     cmd["cmd"] = "set_volume";
-    cmd["volume"] = vol;
+    cmd["volume"] = clamped_gain;
     send_command(cmd.dump());
 }
 

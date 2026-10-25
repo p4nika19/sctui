@@ -53,7 +53,7 @@ TrackListView::TrackListView(
             queue_selected(false);
             return true;
         }
-        if (event == Event::Character('A')) {
+        if (event == Event::Character('A') || event == Event::CtrlN) {
             queue_selected(true);
             return true;
         }

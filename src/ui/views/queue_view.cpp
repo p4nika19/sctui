@@ -32,6 +32,10 @@ QueueView::QueueView(models::AppState& state, PlayFromQueueCallback on_play_from
             move_selected_up();
             return true;
         }
+        if (event == Event::Character('A') || event == Event::CtrlN) {
+            move_selected_to_next();
+            return true;
+        }
         if (event == Event::Character('d') || event == Event::Character('x')) {
             remove_selected();
             return true;
@@ -111,6 +115,37 @@ void QueueView::move_selected_down() {
             }
         }
         selected_index_++;
+    }
+}
+
+void QueueView::move_selected_to_next() {
+    if (state_.queue.tracks.empty() || selected_index_ < 0 ||
+        static_cast<size_t>(selected_index_) >= state_.queue.tracks.size()) {
+        return;
+    }
+
+    bool is_shuffled = state_.queue.shuffle && state_.queue.shuffle_indices.size() == state_.queue.tracks.size();
+    int cur_idx = is_shuffled ? static_cast<int>(state_.queue.shuffle_cursor) : state_.queue.current_index;
+    int target = (cur_idx < 0) ? 0 : (cur_idx + 1);
+    if (target >= static_cast<int>(state_.queue.tracks.size())) {
+        target = static_cast<int>(state_.queue.tracks.size() - 1);
+    }
+
+    if (selected_index_ == cur_idx) {
+        state_.notify("Track is currently playing");
+        return;
+    }
+    if (selected_index_ == target) {
+        state_.notify("Track is already next in queue");
+        return;
+    }
+
+    size_t track_idx = is_shuffled ? state_.queue.shuffle_indices[static_cast<size_t>(selected_index_)] : static_cast<size_t>(selected_index_);
+    std::string title = state_.queue.tracks[track_idx].title;
+
+    if (state_.queue.move_to_next(selected_index_)) {
+        selected_index_ = target;
+        state_.notify("Moved to next in queue: " + core::truncate_string(title, 25));
     }
 }
 

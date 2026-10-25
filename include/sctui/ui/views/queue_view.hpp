@@ -18,6 +18,7 @@ public:
 
     void move_selected_up();
     void move_selected_down();
+    void move_selected_to_next();
     void remove_selected();
     void clear_queue();
     void scroll_up();

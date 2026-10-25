@@ -104,6 +104,95 @@ struct QueueState {
         }
     }
 
+    void queue_track(const Track& track, bool play_next) {
+        if (tracks.empty()) {
+            tracks.push_back(track);
+            current_index = 0;
+            if (shuffle) {
+                shuffle_indices = {0};
+                shuffle_cursor = 0;
+            }
+            return;
+        }
+
+        if (play_next && current_index >= 0 && current_index < static_cast<int>(tracks.size())) {
+            size_t insert_pos = static_cast<size_t>(current_index + 1);
+            tracks.insert(tracks.begin() + insert_pos, track);
+
+            if (shuffle) {
+                if (shuffle_indices.size() != tracks.size() - 1) {
+                    rebuild_shuffle();
+                } else {
+                    for (auto& idx : shuffle_indices) {
+                        if (idx >= insert_pos) {
+                            idx++;
+                        }
+                    }
+                    size_t next_shuf_pos = std::min(shuffle_cursor + 1, shuffle_indices.size());
+                    shuffle_indices.insert(shuffle_indices.begin() + next_shuf_pos, insert_pos);
+                }
+            }
+        } else {
+            size_t append_pos = tracks.size();
+            tracks.push_back(track);
+            if (shuffle) {
+                if (shuffle_indices.size() != tracks.size() - 1) {
+                    rebuild_shuffle();
+                } else {
+                    shuffle_indices.push_back(append_pos);
+                }
+            }
+        }
+    }
+
+    bool move_to_next(int from_index) {
+        if (tracks.empty() || from_index < 0 || static_cast<size_t>(from_index) >= tracks.size()) {
+            return false;
+        }
+
+        if (shuffle && shuffle_indices.size() == tracks.size()) {
+            size_t old_pos = static_cast<size_t>(from_index);
+            if (old_pos == shuffle_cursor) return false;
+            size_t target_pos = shuffle_cursor + 1;
+            if (target_pos >= shuffle_indices.size()) target_pos = shuffle_indices.size() - 1;
+            if (old_pos == target_pos) return false;
+
+            size_t val = shuffle_indices[old_pos];
+            shuffle_indices.erase(shuffle_indices.begin() + old_pos);
+            if (old_pos < target_pos) {
+                target_pos--;
+            }
+            shuffle_indices.insert(shuffle_indices.begin() + target_pos, val);
+            if (shuffle_cursor > old_pos && shuffle_cursor <= target_pos) {
+                shuffle_cursor--;
+            }
+            return true;
+        } else {
+            int cur_idx = current_index;
+            int target_idx = (cur_idx < 0) ? 0 : (cur_idx + 1);
+            if (target_idx >= static_cast<int>(tracks.size())) {
+                target_idx = static_cast<int>(tracks.size() - 1);
+            }
+            if (from_index == cur_idx || from_index == target_idx) {
+                return false;
+            }
+
+            Track t = std::move(tracks[static_cast<size_t>(from_index)]);
+            tracks.erase(tracks.begin() + from_index);
+            if (from_index < target_idx) {
+                target_idx--;
+            }
+            tracks.insert(tracks.begin() + target_idx, std::move(t));
+
+            if (from_index < cur_idx && target_idx >= cur_idx) {
+                current_index--;
+            } else if (from_index > cur_idx && target_idx <= cur_idx) {
+                current_index++;
+            }
+            return true;
+        }
+    }
+
     void set_current_index(int index) {
         current_index = index;
         if (shuffle) {

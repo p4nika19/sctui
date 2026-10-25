@@ -52,7 +52,7 @@ Element HelpPopup::render(const models::AppState& state) {
         separatorLight(),
         section_header("QUEUE & LIBRARY"),
         make_row("a", "Add selected track to queue"),
-        make_row("A", "Play track next (insert after current)"),
+        make_row("A / Ctrl+N", "Move track to next in queue (any tab)"),
         make_row("l", "Toggle like for selected track"),
         make_row("j / k or J / K", "Reorder track down / up in queue"),
         make_row("Up / Down", "Move selection cursor in queue"),

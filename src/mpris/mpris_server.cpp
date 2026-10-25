@@ -1,4 +1,5 @@
 #include "sctui/mpris/mpris_server.hpp"
+#include "sctui/core/cover_art.hpp"
 #include <systemd/sd-bus.h>
 #include <thread>
 #include <atomic>
@@ -322,10 +323,11 @@ static int prop_get_metadata(sd_bus*, const char*, const char*, const char*, sd_
 
         // mpris:artUrl (string)
         if (!track.artwork_url.empty()) {
+            std::string upgraded_art = core::CoverArtProcessor::upgrade_artwork_url(track.artwork_url);
             sd_bus_message_open_container(reply, 'e', "sv");
             sd_bus_message_append_basic(reply, 's', "mpris:artUrl");
             sd_bus_message_open_container(reply, 'v', "s");
-            sd_bus_message_append_basic(reply, 's', track.artwork_url.c_str());
+            sd_bus_message_append_basic(reply, 's', upgraded_art.c_str());
             sd_bus_message_close_container(reply);
             sd_bus_message_close_container(reply);
         }

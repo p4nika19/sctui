@@ -1,4 +1,5 @@
 #include "sctui/discord/discord_rpc.hpp"
+#include "sctui/core/cover_art.hpp"
 #include "sctui/core/logger.hpp"
 #include <sys/socket.h>
 #include <sys/un.h>
@@ -249,7 +250,7 @@ std::string DiscordRpc::build_activity_payload(
 
     // High-resolution artwork URL or official registered Discord asset
     if (!track.artwork_url.empty() && track.artwork_url.starts_with("https://")) {
-        activity["assets"]["large_image"] = track.artwork_url;
+        activity["assets"]["large_image"] = core::CoverArtProcessor::upgrade_artwork_url(track.artwork_url);
     } else {
         activity["assets"]["large_image"] = "soundcloud";
     }

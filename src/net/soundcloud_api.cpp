@@ -63,8 +63,8 @@ namespace {
         }
 
         // Media & Transcodings
-        bool has_unencrypted = false;
-        bool has_encrypted = false;
+        bool has_unencrypted_full = false;
+        bool has_encrypted_full = false;
         bool all_snipped = true;
 
         if (track_obj.contains("media") && track_obj["media"].is_object()) {
@@ -94,13 +94,15 @@ namespace {
                     bool is_enc = (transcoding.protocol.find("encrypted") != std::string::npos ||
                                    transcoding.protocol == "cbc-encrypted-hls" ||
                                    transcoding.protocol == "ctr-encrypted-hls");
-                    if (is_enc) {
-                        has_encrypted = true;
-                    } else {
-                        has_unencrypted = true;
-                    }
+                    bool is_snip = transcoding.snipped || (transcoding.url.find("/preview/") != std::string::npos);
 
-                    if (!transcoding.snipped) {
+                    if (is_snip) {
+                        // Snippet preview transcoding
+                    } else if (is_enc) {
+                        has_encrypted_full = true;
+                        all_snipped = false;
+                    } else {
+                        has_unencrypted_full = true;
                         all_snipped = false;
                     }
 
@@ -114,13 +116,22 @@ namespace {
         }
 
         // Categorize access: DRM-protected vs SoundCloud Go+ vs Playable
-        if (track.policy == "BLOCK" || (has_encrypted && !has_unencrypted)) {
-            track.access_type = models::TrackAccessType::DrmProtected;
-        } else if (track.policy == "SNIP" || track.monetization_model == "SUB_HIGH_TIER" || all_snipped) {
+        // 1. Explicit Go+ tier from SoundCloud API: monetization SUB_HIGH_TIER, policy SNIP, or all transcodings snipped with NO full stream
+        if (track.monetization_model == "SUB_HIGH_TIER" || track.policy == "SNIP" || (all_snipped && !track.transcodings.empty() && !has_encrypted_full && !has_unencrypted_full)) {
             track.access_type = models::TrackAccessType::GoPlus;
             track.is_snipped = true;
+        } else if (has_encrypted_full && !has_unencrypted_full) {
+            // Full song stream is available via Widevine CTR/CBC DRM encryption (e.g. Vxid, ad-supported free listening)
+            track.access_type = models::TrackAccessType::DrmProtected;
+            track.is_snipped = false;
+        } else if (track.policy == "BLOCK") {
+            // Region blocked or copyright blocked
+            track.access_type = models::TrackAccessType::DrmProtected;
+            track.is_snipped = false;
         } else {
+            // Standard playable full stream
             track.access_type = models::TrackAccessType::Playable;
+            track.is_snipped = false;
         }
 
         return track;
@@ -662,12 +673,45 @@ core::Result<std::vector<models::Track>> SoundCloudApi::get_playlist_tracks(uint
     }
 }
 
-core::Result<std::string> SoundCloudApi::resolve_stream_url(const models::Track& track, bool allow_drm) {
-    if (track.is_drm_protected() && !allow_drm) {
-        LOG_WARN("SoundCloudApi", "Track " + std::to_string(track.id) + " ('" + track.title + "') is DRM-protected");
-        return core::MakeError(core::ErrorCode::AuthError, "[DRM Protected] Track is DRM-encrypted (CBC/CTR) and cannot be played");
+core::Result<models::Track> SoundCloudApi::get_track_details(uint64_t track_id) {
+    if (client_id_.empty()) {
+        auto res = resolve_client_id();
+        if (!res) return core::MakeError(core::ErrorCode::AuthError, "Unable to resolve SoundCloud client ID");
     }
 
+    std::string url = std::string(ApiBase) + "/tracks/" + std::to_string(track_id);
+    std::unordered_map<std::string, std::string> params = {
+        {"client_id", client_id_}
+    };
+
+    core::Result<HttpResponse> resp;
+    for (int attempt = 0; attempt < 3; ++attempt) {
+        resp = http_.get(url, {}, params);
+        if (resp && resp->is_2xx()) break;
+        if (resp && (resp->status_code == 401 || resp->status_code == 403)) {
+            (void)resolve_client_id();
+            if (!client_id_.empty()) params["client_id"] = client_id_;
+        }
+        int delay = (resp && resp->status_code == 429) ? (1000 * (attempt + 1)) : (300 * (attempt + 1));
+        std::this_thread::sleep_for(std::chrono::milliseconds(delay));
+    }
+
+    if (!resp || !resp->is_2xx()) {
+        std::string err = resp ? "HTTP " + std::to_string(resp->status_code) : resp.error().message;
+        LOG_ERROR("SoundCloudApi", "Failed to fetch track details for " + std::to_string(track_id) + ": " + err);
+        return core::MakeError(core::ErrorCode::NetworkError, err);
+    }
+
+    try {
+        auto j = nlohmann::json::parse(resp->body);
+        return parse_track_object(j);
+    } catch (const std::exception& e) {
+        LOG_ERROR("SoundCloudApi", "Failed to parse track details JSON for " + std::to_string(track_id) + ": " + std::string(e.what()));
+        return core::MakeError(core::ErrorCode::JsonParseError, e.what());
+    }
+}
+
+core::Result<std::string> SoundCloudApi::resolve_stream_url(const models::Track& track, bool allow_drm) {
     if (client_id_.empty()) {
         auto res = resolve_client_id();
         if (!res) return core::MakeError(core::ErrorCode::AuthError, "Unable to resolve SoundCloud client ID");
@@ -677,80 +721,97 @@ core::Result<std::string> SoundCloudApi::resolve_stream_url(const models::Track&
         return track.stream_url;
     }
 
-    if (track.transcodings.empty()) {
-        LOG_ERROR("SoundCloudApi", "Track " + std::to_string(track.id) + " ('" + track.title + "') has no available transcodings");
-        return core::MakeError(core::ErrorCode::ResourceNotFound, "Track has no available transcodings");
+    models::Track resolved_track = track;
+    if (resolved_track.transcodings.empty()) {
+        LOG_INFO("SoundCloudApi", "Track " + std::to_string(track.id) + " ('" + track.title + "') has no transcodings, fetching full track details from API...");
+        auto detail_res = get_track_details(track.id);
+        if (detail_res && !detail_res->transcodings.empty()) {
+            resolved_track = std::move(*detail_res);
+            LOG_INFO("SoundCloudApi", "Resolved full track details for " + std::to_string(track.id) + " (" + std::to_string(resolved_track.transcodings.size()) + " transcodings)");
+        } else {
+            LOG_ERROR("SoundCloudApi", "Track " + std::to_string(track.id) + " ('" + track.title + "') has no available transcodings after details fetch");
+            return core::MakeError(core::ErrorCode::ResourceNotFound, "Track has no available transcodings");
+        }
+    }
+
+    if (resolved_track.is_drm_protected() && !allow_drm) {
+        LOG_WARN("SoundCloudApi", "Track " + std::to_string(resolved_track.id) + " ('" + resolved_track.title + "') is DRM-protected");
+        return core::MakeError(core::ErrorCode::AuthError, "[DRM Protected] Track is DRM-encrypted (CBC/CTR) and cannot be played");
     }
 
     std::string transcoding_url;
-    if (!track.is_drm_protected()) {
-        // 1. Try progressive mp3 stream
-        for (const auto& t : track.transcodings) {
-            if (t.protocol == "progressive" && t.mime_type.find("mpeg") != std::string::npos) {
+
+    // Helper lambda to check if a transcoding is a 30s preview snippet
+    auto is_preview = [](const models::Transcoding& t) {
+        return t.snipped || (t.url.find("/preview/") != std::string::npos);
+    };
+
+    // 1. Try full unencrypted progressive mp3
+    for (const auto& t : resolved_track.transcodings) {
+        if (!is_preview(t) && t.protocol == "progressive" && t.mime_type.find("mpeg") != std::string::npos) {
+            transcoding_url = t.url;
+            LOG_DEBUG("SoundCloudApi", "Selected full progressive MP3 transcoding: " + t.url);
+            break;
+        }
+    }
+
+    // 2. Try full unencrypted other progressive
+    if (transcoding_url.empty()) {
+        for (const auto& t : resolved_track.transcodings) {
+            if (!is_preview(t) && t.protocol == "progressive") {
                 transcoding_url = t.url;
-                LOG_DEBUG("SoundCloudApi", "Selected progressive MP3 transcoding: " + t.url);
+                LOG_DEBUG("SoundCloudApi", "Selected full progressive transcoding: " + t.url);
                 break;
-            }
-        }
-
-        // 2. Fallback to any progressive
-        if (transcoding_url.empty()) {
-            for (const auto& t : track.transcodings) {
-                if (t.protocol == "progressive") {
-                    transcoding_url = t.url;
-                    LOG_DEBUG("SoundCloudApi", "Selected progressive transcoding: " + t.url);
-                    break;
-                }
-            }
-        }
-
-        // 3. Fallback to HLS AAC 160k or 96k (audio/mp4)
-        if (transcoding_url.empty()) {
-            for (const auto& t : track.transcodings) {
-                if (t.protocol == "hls" && (t.preset == "aac_160k" || t.preset == "aac_96k" || t.mime_type.find("mp4") != std::string::npos)) {
-                    transcoding_url = t.url;
-                    LOG_DEBUG("SoundCloudApi", "Selected HLS AAC transcoding: " + t.url);
-                    break;
-                }
-            }
-        }
-
-        // 4. Fallback to any unencrypted HLS
-        if (transcoding_url.empty()) {
-            for (const auto& t : track.transcodings) {
-                if (t.protocol == "hls") {
-                    transcoding_url = t.url;
-                    LOG_DEBUG("SoundCloudApi", "Selected general HLS transcoding: " + t.url);
-                    break;
-                }
             }
         }
     }
 
-    // If DRM is allowed and transcoding is still empty, look for DRM-protected transcodings
+    // 3. Try full unencrypted HLS AAC (160k or 96k)
+    if (transcoding_url.empty()) {
+        for (const auto& t : resolved_track.transcodings) {
+            if (!is_preview(t) && t.protocol == "hls" && (t.preset == "aac_160k" || t.preset == "aac_96k" || t.mime_type.find("mp4") != std::string::npos)) {
+                transcoding_url = t.url;
+                LOG_DEBUG("SoundCloudApi", "Selected full HLS AAC transcoding: " + t.url);
+                break;
+            }
+        }
+    }
+
+    // 4. Try any full unencrypted HLS
+    if (transcoding_url.empty()) {
+        for (const auto& t : resolved_track.transcodings) {
+            if (!is_preview(t) && t.protocol == "hls") {
+                transcoding_url = t.url;
+                LOG_DEBUG("SoundCloudApi", "Selected full unencrypted general HLS transcoding: " + t.url);
+                break;
+            }
+        }
+    }
+
+    // 5. If DRM is enabled and no full unencrypted stream was chosen, select DRM-protected stream
     if (transcoding_url.empty() && allow_drm) {
-        // First priority: CTR encrypted HLS (Widevine CENC supported by CastLabs Electron on Linux/Windows/Mac)
-        for (const auto& t : track.transcodings) {
-            if (t.protocol == "ctr-encrypted-hls" || t.url.find("ctr-encrypted-hls") != std::string::npos) {
+        // Priority 1: Widevine CTR encrypted HLS (supported on Linux/macOS/Windows via CastLabs Widevine)
+        for (const auto& t : resolved_track.transcodings) {
+            if (!is_preview(t) && (t.protocol == "ctr-encrypted-hls" || t.url.find("ctr-encrypted-hls") != std::string::npos)) {
                 transcoding_url = t.url;
                 LOG_INFO("SoundCloudApi", "Selected Widevine CTR encrypted HLS transcoding: " + t.url + " (" + t.preset + ")");
                 break;
             }
         }
-        // Second priority: CBC encrypted HLS (FairPlay / cbcs)
+        // Priority 2: CBC encrypted HLS
         if (transcoding_url.empty()) {
-            for (const auto& t : track.transcodings) {
-                if (t.protocol == "cbc-encrypted-hls" || t.url.find("cbc-encrypted-hls") != std::string::npos) {
+            for (const auto& t : resolved_track.transcodings) {
+                if (!is_preview(t) && (t.protocol == "cbc-encrypted-hls" || t.url.find("cbc-encrypted-hls") != std::string::npos)) {
                     transcoding_url = t.url;
                     LOG_INFO("SoundCloudApi", "Selected CBC encrypted HLS transcoding: " + t.url + " (" + t.preset + ")");
                     break;
                 }
             }
         }
-        // Fallback: any other encrypted transcoding
+        // Priority 3: any full encrypted stream
         if (transcoding_url.empty()) {
-            for (const auto& t : track.transcodings) {
-                if (t.protocol.find("encrypted") != std::string::npos || t.url.find("encrypted") != std::string::npos) {
+            for (const auto& t : resolved_track.transcodings) {
+                if (!is_preview(t) && (t.protocol.find("encrypted") != std::string::npos || t.url.find("encrypted") != std::string::npos)) {
                     transcoding_url = t.url;
                     LOG_INFO("SoundCloudApi", "Selected general encrypted HLS transcoding: " + t.url);
                     break;
@@ -759,24 +820,17 @@ core::Result<std::string> SoundCloudApi::resolve_stream_url(const models::Track&
         }
     }
 
+    // 6. Last resort fallback: preview snippet only if no full stream exists (Go+ tracks)
     if (transcoding_url.empty()) {
-        bool all_encrypted = true;
-        for (const auto& t : track.transcodings) {
-            if (t.protocol.find("encrypted") == std::string::npos &&
-                t.protocol != "cbc-encrypted-hls" &&
-                t.protocol != "ctr-encrypted-hls") {
-                all_encrypted = false;
+        for (const auto& t : resolved_track.transcodings) {
+            if (t.protocol == "progressive") {
+                transcoding_url = t.url;
+                LOG_DEBUG("SoundCloudApi", "Selected preview progressive transcoding: " + t.url);
                 break;
             }
         }
-        if (all_encrypted) {
-            if (!allow_drm) {
-                LOG_WARN("SoundCloudApi", "Track " + std::to_string(track.id) + " ('" + track.title + "') is DRM encrypted");
-                return core::MakeError(core::ErrorCode::AuthError, "[DRM Protected] Track is DRM-encrypted (CBC/CTR) and cannot be played");
-            }
-            transcoding_url = track.transcodings.front().url;
-        } else {
-            transcoding_url = track.transcodings.front().url;
+        if (transcoding_url.empty() && !resolved_track.transcodings.empty()) {
+            transcoding_url = resolved_track.transcodings.front().url;
         }
     }
 

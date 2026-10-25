@@ -71,6 +71,7 @@ private:
     bool mouse_control_{false};
     bool drm_engine_enabled_{true};
     bool download_drm_tracks_in_likes_{true};
+    bool fullscreen_visualizer_mirrored_{false};
 
     ftxui::Component doh_input_comp_;
     ftxui::Component dns_input_comp_;
