@@ -37,7 +37,9 @@ A high-performance, responsive, and visually polished native Terminal User Inter
   - **Discord Rich Presence** showcasing current track, artist, and playback progress.
   - Multi-browser cookie extraction (Firefox, Chrome, Chromium, Brave, Edge, Opera, Vivaldi) for effortless one-click authentication.
 
+<p align="center">
 <img width="443" height="183" alt="изображение" src="https://github.com/user-attachments/assets/09adc152-6165-49af-9267-ca98b29cfb69" />
+</p>
 
 ---
 ## 🚀 Quick Automated Installation
