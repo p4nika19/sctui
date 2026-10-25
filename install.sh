@@ -143,6 +143,7 @@ install_dependencies() {
 }
 
 ensure_xmake() {
+    export XMAKE_ROOT=y
     if ! command -v xmake &>/dev/null; then
         info "xmake build system was not found. Installing xmake..."
         curl -fsSL https://xmake.io/shget.text | bash
@@ -161,7 +162,8 @@ ensure_xmake() {
 build_sctui() {
     info "Building sctui in optimized Release mode..."
     # xmake.lua automatically configures clang toolchain, mold linker, and aggressive SIMD/LTO flags
-    xmake -m release
+    xmake config -m release -y
+    xmake build -y sctui
     success "sctui binary assembled successfully!"
 }
 
