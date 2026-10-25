@@ -50,6 +50,45 @@ if [ "${EUID:-$(id -u)}" -ne 0 ]; then
     fi
 fi
 
+# Reattach terminal stdin if running inside a pipe (e.g. curl ... | bash)
+# so interactive prompts (such as sudo password requests) work smoothly.
+if [ ! -t 0 ] && [ -e /dev/tty ]; then
+    exec </dev/tty
+fi
+
+REPO="${SCTUI_REPO:-p4nika19/sctui}"
+BRANCH="${SCTUI_BRANCH:-main}"
+
+# Determine project directory (supports both local checkout and curl piped execution)
+CLEANUP_TMP=""
+PROJECT_DIR=""
+
+if [ -n "${BASH_SOURCE[0]:-}" ] && [ -f "${BASH_SOURCE[0]}" ]; then
+    CANDIDATE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    if [ -f "$CANDIDATE_DIR/xmake.lua" ] && [ -d "$CANDIDATE_DIR/satellite" ]; then
+        PROJECT_DIR="$CANDIDATE_DIR"
+    fi
+fi
+
+if [ -z "$PROJECT_DIR" ]; then
+    if [ -f "./xmake.lua" ] && [ -d "./satellite" ]; then
+        PROJECT_DIR="$(pwd)"
+    else
+        TMP_DIR=$(mktemp -d "${TMPDIR:-/tmp}/sctui-install-XXXXXX")
+        CLEANUP_TMP="$TMP_DIR"
+        trap 'if [ -n "$CLEANUP_TMP" ] && [ -d "$CLEANUP_TMP" ]; then rm -rf "$CLEANUP_TMP"; fi' EXIT
+
+        if command -v git >/dev/null 2>&1; then
+            echo -e "${CYAN}${BOLD}[INFO]${NC} Cloning sctui from https://github.com/$REPO.git (branch: $BRANCH)..."
+            git clone --depth 1 --branch "$BRANCH" "https://github.com/$REPO.git" "$TMP_DIR"
+        else
+            echo -e "${CYAN}${BOLD}[INFO]${NC} Downloading sctui source archive from GitHub..."
+            curl -fsSL "https://github.com/$REPO/archive/refs/heads/$BRANCH.tar.gz" | tar -xz -C "$TMP_DIR" --strip-components=1
+        fi
+        PROJECT_DIR="$TMP_DIR"
+    fi
+fi
+
 # Detect Package Manager
 detect_pm() {
     if command -v pacman &>/dev/null; then
@@ -103,7 +142,27 @@ EOF
 
 install_dependencies() {
     local pm="$1"
-    info "Installing system dependencies via ${BOLD}${pm}${NC}..."
+    shift || true
+
+    if [[ " $* " == *" --no-deps "* ]]; then
+        info "Skipping package manager dependency installation (--no-deps)."
+        return 0
+    fi
+
+    # Check if core tools are already present; if so, skip re-running sudo package manager
+    local missing_tools=()
+    for bin in clang mold git curl node npm make; do
+        if ! command -v "$bin" &>/dev/null; then
+            missing_tools+=("$bin")
+        fi
+    done
+
+    if [ ${#missing_tools[@]} -eq 0 ]; then
+        info "Core development tools (clang, mold, git, curl, node, npm, make) are already installed."
+        return 0
+    fi
+
+    info "Installing missing dependencies (${missing_tools[*]}) via ${BOLD}${pm}${NC}..."
 
     case "$pm" in
         pacman)
@@ -168,9 +227,7 @@ build_sctui() {
 }
 
 setup_satellite() {
-    local script_dir
-    script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-    local sat_dir="${script_dir}/satellite"
+    local sat_dir="${PROJECT_DIR}/satellite"
 
     if [ -d "$sat_dir" ]; then
         info "Setting up Widevine DRM Castlabs Electron satellite in ${sat_dir}..."
@@ -194,13 +251,11 @@ setup_satellite() {
 }
 
 install_system() {
-    local script_dir
-    script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-    local bin_source="${script_dir}/build/linux/x86_64/release/sctui"
+    local bin_source="${PROJECT_DIR}/build/linux/x86_64/release/sctui"
 
     if [ ! -f "$bin_source" ]; then
         # Try finding anywhere under build/
-        bin_source="$(find "${script_dir}/build" -type f -name sctui -perm -111 2>/dev/null | head -n 1 || true)"
+        bin_source="$(find "${PROJECT_DIR}/build" -type f -name sctui -perm -111 2>/dev/null | head -n 1 || true)"
     fi
 
     if [ ! -f "$bin_source" ]; then
@@ -213,7 +268,12 @@ install_system() {
     local share_dest="/usr/local/share/sctui/satellite"
     local use_sudo=false
 
-    if [ -w "/usr/local/bin" ]; then
+    if [ "${USER_ONLY:-false}" = true ] || [[ " $* " == *" --user "* ]]; then
+        bin_dest="$HOME/.local/bin/sctui"
+        share_dest="$HOME/.local/share/sctui/satellite"
+        use_sudo=false
+        mkdir -p "$HOME/.local/bin" "$HOME/.local/share/sctui"
+    elif [ -w "/usr/local/bin" ]; then
         use_sudo=false
     elif [ -n "$SUDO" ]; then
         use_sudo=true
@@ -228,17 +288,17 @@ install_system() {
     if [ "$use_sudo" = true ]; then
         $SUDO mkdir -p "/usr/local/bin" "/usr/local/share/sctui"
         $SUDO install -m 755 "$bin_source" "$bin_dest"
-        if [ -d "${script_dir}/satellite" ]; then
+        if [ -d "${PROJECT_DIR}/satellite" ]; then
             $SUDO rm -rf "$share_dest"
-            $SUDO cp -r "${script_dir}/satellite" "$share_dest"
+            $SUDO cp -r "${PROJECT_DIR}/satellite" "$share_dest"
             $SUDO chmod -R a+rX "$share_dest"
         fi
     else
         mkdir -p "$(dirname "$bin_dest")" "$(dirname "$share_dest")"
         install -m 755 "$bin_source" "$bin_dest"
-        if [ -d "${script_dir}/satellite" ]; then
+        if [ -d "${PROJECT_DIR}/satellite" ]; then
             rm -rf "$share_dest"
-            cp -r "${script_dir}/satellite" "$share_dest"
+            cp -r "${PROJECT_DIR}/satellite" "$share_dest"
         fi
     fi
 
@@ -258,15 +318,16 @@ install_system() {
 
 main() {
     print_banner
+    cd "$PROJECT_DIR"
     local pm
     pm="$(detect_pm)"
     info "Detected package manager: ${BOLD}${pm}${NC}"
 
-    install_dependencies "$pm"
+    install_dependencies "$pm" "$@"
     ensure_xmake
     build_sctui
     setup_satellite
-    install_system
+    install_system "$@"
 
     echo
     echo "============================================================================="

@@ -54,7 +54,20 @@ A high-performance, responsive, and visually polished native Terminal User Inter
 
 ## 🚀 Quick Automated Installation
 
-Run the universal installer script. It automatically detects your distribution's package manager, installs all build dependencies, bootstraps `xmake`, compiles the optimized release binary, sets up the DRM satellite, and installs `sctui` system-wide:
+Open a terminal and run this single command:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/p4nika19/sctui/main/get.sh | bash
+```
+
+The installer automatically detects your distribution's package manager, installs all build dependencies, bootstraps `xmake`, compiles the optimized release binary, sets up the Widevine DRM satellite, and installs `sctui` system-wide.
+
+> **Tip:** If you prefer installing without root privileges directly into your user home directory (`~/.local/bin` and `~/.local/share`), pass `--user`:
+> ```bash
+> curl -fsSL https://raw.githubusercontent.com/p4nika19/sctui/main/get.sh | bash -s -- --user
+> ```
+
+Alternatively, if you already cloned the repository locally:
 
 ```bash
 ./install.sh
