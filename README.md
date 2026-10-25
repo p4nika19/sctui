@@ -177,3 +177,6 @@ Configuration is saved in `~/.config/sctui/config.json`:
 - **`drm_engine_enabled`**: Enables the Castlabs Electron Widevine daemon for playing DRM-protected SoundCloud tracks.
 - **`fullscreen_visualizer_style`**: Fullscreen visualizer display mode: Stretched full width (`0`), Low frequencies centered & mirrored (`1`), or High frequencies centered & mirrored (`2`).
 - **`icon_style`**: Selects between Emoji (`0`), Unicode Clean (`1`), or Default ASCII (`2`) symbols.
+---
+### DISCLAIMER
+The project is provided "as is." I make no promises regarding bug fixes or providing general support; it works for me—on two different devices—so it should work for you, too. Much of the project was created using a fairly inexpensive, lightweight neural network, so please don’t expect the code to be exceptionally clean or logically elegant.
