@@ -50,12 +50,6 @@ if [ "${EUID:-$(id -u)}" -ne 0 ]; then
     fi
 fi
 
-# Reattach terminal stdin if running inside a pipe (e.g. curl ... | bash)
-# so interactive prompts (such as sudo password requests) work smoothly.
-if [ ! -t 0 ] && [ -e /dev/tty ]; then
-    exec </dev/tty
-fi
-
 REPO="${SCTUI_REPO:-p4nika19/sctui}"
 BRANCH="${SCTUI_BRANCH:-main}"
 
@@ -199,7 +193,11 @@ install_dependencies() {
             ;;
         unknown)
             print_manual_fallback
-            read -r -p "Have you installed the required dependencies and wish to continue? [y/N] " confirm
+            if [ -e /dev/tty ]; then
+                read -r -p "Have you installed the required dependencies and wish to continue? [y/N] " confirm </dev/tty
+            else
+                read -r -p "Have you installed the required dependencies and wish to continue? [y/N] " confirm
+            fi
             if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
                 fatal "Installation aborted. Please install required dependencies and run this script again."
             fi

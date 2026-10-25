@@ -15,12 +15,6 @@ set -euo pipefail
 REPO="${SCTUI_REPO:-p4nika19/sctui}"
 BRANCH="${SCTUI_BRANCH:-main}"
 
-# Reattach terminal stdin if running inside a pipe (e.g. curl ... | bash)
-# so interactive prompts (such as sudo password requests) work smoothly.
-if [ ! -t 0 ] && [ -e /dev/tty ]; then
-    exec </dev/tty
-fi
-
 ARCH=$(uname -m)
 if [ "$ARCH" != "x86_64" ]; then
     echo "[!] Warning: Native optimized SIMD builds are targeted for x86_64 Linux (detected: $ARCH)." >&2
@@ -44,4 +38,8 @@ else
     curl -fsSL "https://github.com/$REPO/archive/refs/heads/$BRANCH.tar.gz" | tar -xz -C "$TMP_DIR" --strip-components=1
 fi
 
-bash "$TMP_DIR/install.sh" "$@"
+if [ -e /dev/tty ]; then
+    exec bash "$TMP_DIR/install.sh" "$@" </dev/tty
+else
+    exec bash "$TMP_DIR/install.sh" "$@"
+fi
