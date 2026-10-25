@@ -178,7 +178,7 @@ setup_satellite() {
             cd "$sat_dir"
             if [ ! -d "node_modules" ] || ! npm list electron &>/dev/null; then
                 info "Downloading required Castlabs Electron release (v44.9.3+wvcus)..."
-                npm install "https://github.com/castlabs/electron-releases#v44.9.3+wvcus" --save || {
+                npm install --allow-git=all "https://github.com/castlabs/electron-releases#v44.9.3+wvcus" --save || {
                     warn "Automatic Castlabs Electron pre-download encountered an issue. sctui will attempt auto-download on first DRM launch."
                 }
             else

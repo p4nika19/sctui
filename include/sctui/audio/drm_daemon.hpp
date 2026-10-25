@@ -54,7 +54,7 @@ public:
 
     static constexpr const char* RequiredElectronVersion = "44.9.3+wvcus";
     static constexpr const char* RequiredElectronTag = "v44.9.3+wvcus";
-    static constexpr const char* ElectronInstallCommand = "npm install \"https://github.com/castlabs/electron-releases#v44.9.3+wvcus\" --save";
+    static constexpr const char* ElectronInstallCommand = "npm install --allow-git=all \"https://github.com/castlabs/electron-releases#v44.9.3+wvcus\" --save";
 
     static std::filesystem::path resolve_satellite_dir(const std::filesystem::path& user_specified = {});
     static bool is_castlabs_electron_installed(const std::filesystem::path& satellite_dir = {});

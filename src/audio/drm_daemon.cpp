@@ -212,7 +212,16 @@ bool DrmSatelliteDaemon::download_castlabs_electron(const std::filesystem::path&
         }
     }
 
-    std::string cmd = "cd \"" + sat_dir.string() + "\" && npm install \"https://github.com/castlabs/electron-releases#v44.9.3+wvcus\" --save 2>&1";
+    std::filesystem::path npmrc_path = sat_dir / ".npmrc";
+    if (!std::filesystem::exists(npmrc_path, ec)) {
+        std::ofstream nrf(npmrc_path);
+        if (nrf.is_open()) {
+            nrf << "allow-git=all\n";
+            nrf.close();
+        }
+    }
+
+    std::string cmd = "cd \"" + sat_dir.string() + "\" && npm install --allow-git=all \"https://github.com/castlabs/electron-releases#v44.9.3+wvcus\" --save 2>&1";
     LOG_INFO("DrmDaemon", "Executing Castlabs Electron installation: " + cmd);
 
     FILE* pipe = ::popen(cmd.c_str(), "r");

@@ -565,7 +565,7 @@ void test_castlabs_electron_presence_and_download() {
 
     // 2. Verify command strings match the exact device install command from history
     REQUIRE(std::string(sctui::audio::DrmSatelliteDaemon::ElectronInstallCommand) ==
-            "npm install \"https://github.com/castlabs/electron-releases#v44.9.3+wvcus\" --save");
+            "npm install --allow-git=all \"https://github.com/castlabs/electron-releases#v44.9.3+wvcus\" --save");
     REQUIRE(std::string(sctui::audio::DrmSatelliteDaemon::RequiredElectronVersion) == "44.9.3+wvcus");
     REQUIRE(std::string(sctui::audio::DrmSatelliteDaemon::RequiredElectronTag) == "v44.9.3+wvcus");
 
