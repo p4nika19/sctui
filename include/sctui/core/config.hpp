@@ -85,19 +85,41 @@ struct Config {
     bool drm_engine_enabled{true};
     bool download_drm_tracks_in_likes{true};
 
+    // First-Run Onboarding status
+    bool onboarding_completed{false};
+
     [[nodiscard]] std::string get_effective_doh_url() const {
-        if (dns_mode != DnsMode::DoH) return "";
-        switch (doh_provider) {
-            case DohProvider::Cloudflare:
-                return "https://cloudflare-dns.com/dns-query";
-            case DohProvider::Google:
-                return "https://dns.google/dns-query";
-            case DohProvider::Quad9:
-                return "https://dns.quad9.net/dns-query";
-            case DohProvider::Custom:
-                return doh_url.empty() ? "https://cloudflare-dns.com/dns-query" : doh_url;
+        if (dns_mode == DnsMode::DoH) {
+            switch (doh_provider) {
+                case DohProvider::Cloudflare:
+                    return "https://1.1.1.1/dns-query";
+                case DohProvider::Google:
+                    return "https://8.8.8.8/dns-query";
+                case DohProvider::Quad9:
+                    return "https://9.9.9.9/dns-query";
+                case DohProvider::Custom:
+                    if (doh_url.empty()) return "https://1.1.1.1/dns-query";
+                    if (doh_url.starts_with("http://") || doh_url.starts_with("https://")) {
+                        return doh_url;
+                    }
+                    return "https://" + doh_url + "/dns-query";
+            }
+        } else if (dns_mode == DnsMode::Custom && !custom_dns_server.empty()) {
+            if (custom_dns_server.starts_with("http://") || custom_dns_server.starts_with("https://")) {
+                return custom_dns_server;
+            }
+            if (custom_dns_server == "1.1.1.1" || custom_dns_server == "1.0.0.1") {
+                return "https://1.1.1.1/dns-query";
+            }
+            if (custom_dns_server == "8.8.8.8" || custom_dns_server == "8.8.4.4") {
+                return "https://8.8.8.8/dns-query";
+            }
+            if (custom_dns_server == "9.9.9.9" || custom_dns_server == "149.112.112.112") {
+                return "https://9.9.9.9/dns-query";
+            }
+            return "https://" + custom_dns_server + "/dns-query";
         }
-        return doh_url;
+        return "";
     }
 
     static const char* image_protocol_to_string(ImageProtocol proto) {

@@ -18,6 +18,7 @@
 #include "sctui/ui/views/queue_view.hpp"
 #include "sctui/ui/views/settings_view.hpp"
 #include "sctui/ui/views/account_view.hpp"
+#include "sctui/ui/views/onboarding_view.hpp"
 #include "sctui/core/track_cache.hpp"
 #include "sctui/discord/discord_rpc.hpp"
 
@@ -127,6 +128,7 @@ private:
     std::unique_ptr<views::QueueView> queue_view_;
     std::unique_ptr<views::SettingsView> settings_view_;
     std::unique_ptr<views::AccountView> account_view_;
+    std::unique_ptr<views::OnboardingView> onboarding_view_;
 
     std::shared_ptr<core::TrackCacheManager> cache_manager_;
 
@@ -143,6 +145,7 @@ private:
     bool fullscreen_cover_drawn_{false};
     bool queue_source_is_likes_{false};
     std::atomic<bool> is_downloading_likes_{false};
+    std::unordered_map<uint64_t, std::vector<models::Track>> playlist_session_cache_;
     std::jthread likes_download_thread_;
     std::string likes_resume_href_;
     std::atomic<bool> likes_fully_fetched_{false};

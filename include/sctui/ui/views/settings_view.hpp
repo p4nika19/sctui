@@ -35,9 +35,12 @@ public:
     ftxui::Element render(bool is_focused);
 
     void reload_from_config();
+    void reset_selection();
     void select_field(int field_idx);
+    [[nodiscard]] int get_selected_field() const noexcept { return selected_field_; }
     bool handle_mouse_click(int y, int x);
     bool is_editing_text() const;
+    bool is_field_visible(int field_idx) const;
 
 private:
     models::AppState& state_;

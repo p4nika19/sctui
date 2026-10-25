@@ -121,6 +121,9 @@ Result<Config> Config::load(const std::filesystem::path& path) {
         if (j.contains("download_drm_tracks_in_likes") && j["download_drm_tracks_in_likes"].is_boolean()) {
             config.download_drm_tracks_in_likes = j["download_drm_tracks_in_likes"].get<bool>();
         }
+        if (j.contains("onboarding_completed") && j["onboarding_completed"].is_boolean()) {
+            config.onboarding_completed = j["onboarding_completed"].get<bool>();
+        }
         if (j.contains("discord_client_id") && j["discord_client_id"].is_string()) {
             config.discord_client_id = j["discord_client_id"].get<std::string>();
         }
@@ -178,6 +181,7 @@ Result<void> Config::save(const std::filesystem::path& path) const {
         j["discord_client_id"] = discord_client_id;
         j["drm_engine_enabled"] = drm_engine_enabled;
         j["download_drm_tracks_in_likes"] = download_drm_tracks_in_likes;
+        j["onboarding_completed"] = onboarding_completed;
         j["cache_dir"] = cache_dir;
 
         std::ofstream file(path);

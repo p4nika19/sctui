@@ -14,6 +14,7 @@ using namespace ftxui;
 namespace {
 constexpr size_t kCacheSizes[] = { 256, 512, 1024, 2048, 4096, 8192, 0 }; // 0 = unlimited
 constexpr int kNumCacheSizes = sizeof(kCacheSizes) / sizeof(kCacheSizes[0]);
+constexpr int kTotalFields = 20;
 }
 
 SettingsView::SettingsView(
@@ -57,8 +58,6 @@ SettingsView::SettingsView(
             return true;
         }
 
-        constexpr int kTotalFields = 20;
-
         // Dedicated text editing mode for URL / IP text input fields
         if (is_editing_text()) {
             if (event == Event::Escape) {
@@ -66,21 +65,31 @@ SettingsView::SettingsView(
                 return true;
             }
             if (event == Event::Tab || event == Event::ArrowDown || event == Event::Return) {
-                selected_field_ = (selected_field_ + 1) % kTotalFields;
-                if (selected_field_ == 6) doh_cursor_pos_ = static_cast<int>(doh_url_input_.size());
-                if (selected_field_ == 7) proxy_cursor_pos_ = static_cast<int>(proxy_url_input_.size());
+                do {
+                    selected_field_ = (selected_field_ + 1) % kTotalFields;
+                } while (!is_field_visible(selected_field_));
+                if (selected_field_ == 7) {
+                    if (dns_mode_idx_ == 1) doh_cursor_pos_ = static_cast<int>(doh_url_input_.size());
+                    else if (dns_mode_idx_ == 2) dns_cursor_pos_ = static_cast<int>(custom_dns_input_.size());
+                }
+                if (selected_field_ == 8) proxy_cursor_pos_ = static_cast<int>(proxy_url_input_.size());
                 return true;
             }
             if (event == Event::TabReverse || event == Event::ArrowUp) {
-                selected_field_ = (selected_field_ + kTotalFields - 1) % kTotalFields;
-                if (selected_field_ == 6) doh_cursor_pos_ = static_cast<int>(doh_url_input_.size());
-                if (selected_field_ == 7) proxy_cursor_pos_ = static_cast<int>(proxy_url_input_.size());
+                do {
+                    selected_field_ = (selected_field_ + kTotalFields - 1) % kTotalFields;
+                } while (!is_field_visible(selected_field_));
+                if (selected_field_ == 7) {
+                    if (dns_mode_idx_ == 1) doh_cursor_pos_ = static_cast<int>(doh_url_input_.size());
+                    else if (dns_mode_idx_ == 2) dns_cursor_pos_ = static_cast<int>(custom_dns_input_.size());
+                }
+                if (selected_field_ == 8) proxy_cursor_pos_ = static_cast<int>(proxy_url_input_.size());
                 return true;
             }
 
             std::string* active_text = nullptr;
             int* active_cursor = nullptr;
-            if (selected_field_ == 6) {
+            if (selected_field_ == 7) {
                 if (dns_mode_idx_ == 1 && doh_provider_idx_ == 3) {
                     active_text = &doh_url_input_;
                     active_cursor = &doh_cursor_pos_;
@@ -88,7 +97,7 @@ SettingsView::SettingsView(
                     active_text = &custom_dns_input_;
                     active_cursor = &dns_cursor_pos_;
                 }
-            } else if (selected_field_ == 7) {
+            } else if (selected_field_ == 8) {
                 active_text = &proxy_url_input_;
                 active_cursor = &proxy_cursor_pos_;
             }
@@ -159,16 +168,26 @@ SettingsView::SettingsView(
         }
 
         if (event == Event::ArrowDown || event == Event::Character('j') || event == Event::Tab) {
-            selected_field_ = (selected_field_ + 1) % kTotalFields;
-            if (selected_field_ == 6) doh_cursor_pos_ = static_cast<int>(doh_url_input_.size());
-            if (selected_field_ == 7) proxy_cursor_pos_ = static_cast<int>(proxy_url_input_.size());
+            do {
+                selected_field_ = (selected_field_ + 1) % kTotalFields;
+            } while (!is_field_visible(selected_field_));
+            if (selected_field_ == 7) {
+                if (dns_mode_idx_ == 1) doh_cursor_pos_ = static_cast<int>(doh_url_input_.size());
+                else if (dns_mode_idx_ == 2) dns_cursor_pos_ = static_cast<int>(custom_dns_input_.size());
+            }
+            if (selected_field_ == 8) proxy_cursor_pos_ = static_cast<int>(proxy_url_input_.size());
             return true;
         }
 
         if (event == Event::ArrowUp || event == Event::Character('k') || event == Event::TabReverse) {
-            selected_field_ = (selected_field_ + kTotalFields - 1) % kTotalFields;
-            if (selected_field_ == 6) doh_cursor_pos_ = static_cast<int>(doh_url_input_.size());
-            if (selected_field_ == 7) proxy_cursor_pos_ = static_cast<int>(proxy_url_input_.size());
+            do {
+                selected_field_ = (selected_field_ + kTotalFields - 1) % kTotalFields;
+            } while (!is_field_visible(selected_field_));
+            if (selected_field_ == 7) {
+                if (dns_mode_idx_ == 1) doh_cursor_pos_ = static_cast<int>(doh_url_input_.size());
+                else if (dns_mode_idx_ == 2) dns_cursor_pos_ = static_cast<int>(custom_dns_input_.size());
+            }
+            if (selected_field_ == 8) proxy_cursor_pos_ = static_cast<int>(proxy_url_input_.size());
             return true;
         }
 
@@ -183,15 +202,19 @@ SettingsView::SettingsView(
                 state_.icon_style = static_cast<core::IconStyle>(icon_style_idx_);
                 return true;
             }
-            if (selected_field_ == 4) { // DNS Mode
+            if (selected_field_ == 4) { // Fullscreen Visualizer Mirrored
+                fullscreen_visualizer_mirrored_ = !fullscreen_visualizer_mirrored_;
+                return true;
+            }
+            if (selected_field_ == 5) { // DNS Mode
                 dns_mode_idx_ = (dns_mode_idx_ + 2) % 3;
                 return true;
             }
-            if (selected_field_ == 5) { // DoH Provider
+            if (selected_field_ == 6) { // DoH Provider
                 doh_provider_idx_ = (doh_provider_idx_ + 3) % 4;
                 return true;
             }
-            if (selected_field_ == 8) { // Max cache size
+            if (selected_field_ == 9) { // Max cache size
                 int cur_idx = 2;
                 for (int i = 0; i < kNumCacheSizes; ++i) {
                     if (kCacheSizes[i] == max_cache_size_mb_) { cur_idx = i; break; }
@@ -200,39 +223,35 @@ SettingsView::SettingsView(
                 max_cache_size_mb_ = kCacheSizes[cur_idx];
                 return true;
             }
-            if (selected_field_ == 9) { // Lock liked in cache
+            if (selected_field_ == 10) { // Lock liked in cache
                 lock_liked_tracks_in_cache_ = !lock_liked_tracks_in_cache_;
                 return true;
             }
-            if (selected_field_ == 10) { // Don't count liked in general cache
+            if (selected_field_ == 11) { // Don't count liked in general cache
                 dont_count_liked_in_general_cache_ = !dont_count_liked_in_general_cache_;
                 return true;
             }
-            if (selected_field_ == 13) { // Volume
+            if (selected_field_ == 14) { // Volume
                 volume_input_ = std::max(0, volume_input_ - 5);
                 return true;
             }
-            if (selected_field_ == 14) { // Discord Rich Presence
+            if (selected_field_ == 15) { // Discord Rich Presence
                 discord_rpc_enabled_ = !discord_rpc_enabled_;
                 return true;
             }
-            if (selected_field_ == 15) { // Mouse Controls
+            if (selected_field_ == 16) { // Mouse Controls
                 mouse_control_ = !mouse_control_;
                 return true;
             }
-            if (selected_field_ == 16) { // DRM Playback Engine
+            if (selected_field_ == 17) { // DRM Playback Engine
                 drm_engine_enabled_ = !drm_engine_enabled_;
                 return true;
             }
-            if (selected_field_ == 17) { // Download DRM in Likes
+            if (selected_field_ == 18) { // Download DRM in Likes
                 download_drm_tracks_in_likes_ = !download_drm_tracks_in_likes_;
                 return true;
             }
-            if (selected_field_ == 18) { // Fullscreen Visualizer Mirrored
-                fullscreen_visualizer_mirrored_ = !fullscreen_visualizer_mirrored_;
-                return true;
-            }
-            if (selected_field_ != 6 && selected_field_ != 7) {
+            if (selected_field_ != 7 && selected_field_ != 8) {
                 state_.focused_panel = models::FocusPanel::Sidebar;
                 return true;
             }
@@ -249,14 +268,18 @@ SettingsView::SettingsView(
                 return true;
             }
             if (selected_field_ == 4) {
-                dns_mode_idx_ = (dns_mode_idx_ + 1) % 3;
+                fullscreen_visualizer_mirrored_ = !fullscreen_visualizer_mirrored_;
                 return true;
             }
             if (selected_field_ == 5) {
+                dns_mode_idx_ = (dns_mode_idx_ + 1) % 3;
+                return true;
+            }
+            if (selected_field_ == 6) {
                 doh_provider_idx_ = (doh_provider_idx_ + 1) % 4;
                 return true;
             }
-            if (selected_field_ == 8) {
+            if (selected_field_ == 9) {
                 int cur_idx = 2;
                 for (int i = 0; i < kNumCacheSizes; ++i) {
                     if (kCacheSizes[i] == max_cache_size_mb_) { cur_idx = i; break; }
@@ -265,31 +288,31 @@ SettingsView::SettingsView(
                 max_cache_size_mb_ = kCacheSizes[cur_idx];
                 return true;
             }
-            if (selected_field_ == 9) {
+            if (selected_field_ == 10) {
                 lock_liked_tracks_in_cache_ = !lock_liked_tracks_in_cache_;
                 return true;
             }
-            if (selected_field_ == 10) {
+            if (selected_field_ == 11) {
                 dont_count_liked_in_general_cache_ = !dont_count_liked_in_general_cache_;
                 return true;
             }
-            if (selected_field_ == 13) {
+            if (selected_field_ == 14) {
                 volume_input_ = std::min(150, volume_input_ + 5);
                 return true;
             }
-            if (selected_field_ == 14) {
+            if (selected_field_ == 15) {
                 discord_rpc_enabled_ = !discord_rpc_enabled_;
                 return true;
             }
-            if (selected_field_ == 15) {
+            if (selected_field_ == 16) {
                 mouse_control_ = !mouse_control_;
                 return true;
             }
-            if (selected_field_ == 16) {
+            if (selected_field_ == 17) {
                 drm_engine_enabled_ = !drm_engine_enabled_;
                 return true;
             }
-            if (selected_field_ == 17) {
+            if (selected_field_ == 18) {
                 download_drm_tracks_in_likes_ = !download_drm_tracks_in_likes_;
                 return true;
             }
@@ -320,14 +343,18 @@ SettingsView::SettingsView(
                 return true;
             }
             if (selected_field_ == 4) {
-                dns_mode_idx_ = (dns_mode_idx_ + 1) % 3;
+                fullscreen_visualizer_mirrored_ = !fullscreen_visualizer_mirrored_;
                 return true;
             }
             if (selected_field_ == 5) {
+                dns_mode_idx_ = (dns_mode_idx_ + 1) % 3;
+                return true;
+            }
+            if (selected_field_ == 6) {
                 doh_provider_idx_ = (doh_provider_idx_ + 1) % 4;
                 return true;
             }
-            if (selected_field_ == 8) {
+            if (selected_field_ == 9) {
                 int cur_idx = 2;
                 for (int i = 0; i < kNumCacheSizes; ++i) {
                     if (kCacheSizes[i] == max_cache_size_mb_) { cur_idx = i; break; }
@@ -336,21 +363,21 @@ SettingsView::SettingsView(
                 max_cache_size_mb_ = kCacheSizes[cur_idx];
                 return true;
             }
-            if (selected_field_ == 9) {
+            if (selected_field_ == 10) {
                 lock_liked_tracks_in_cache_ = !lock_liked_tracks_in_cache_;
                 return true;
             }
-            if (selected_field_ == 10) {
+            if (selected_field_ == 11) {
                 dont_count_liked_in_general_cache_ = !dont_count_liked_in_general_cache_;
                 return true;
             }
-            if (selected_field_ == 11) { // Download All Likes
+            if (selected_field_ == 12) { // Download All Likes
                 if (on_download_all_likes_) {
                     on_download_all_likes_();
                 }
                 return true;
             }
-            if (selected_field_ == 12) { // Clear Cache
+            if (selected_field_ == 13) { // Clear Cache
                 if (on_clear_cache_) {
                     on_clear_cache_(lock_liked_tracks_in_cache_);
                     feedback_message_ = "Cache cleaned successfully!";
@@ -358,24 +385,20 @@ SettingsView::SettingsView(
                 }
                 return true;
             }
-            if (selected_field_ == 14) { // Discord Rich Presence
+            if (selected_field_ == 15) { // Discord Rich Presence
                 discord_rpc_enabled_ = !discord_rpc_enabled_;
                 return true;
             }
-            if (selected_field_ == 15) { // Mouse Controls
+            if (selected_field_ == 16) { // Mouse Controls
                 mouse_control_ = !mouse_control_;
                 return true;
             }
-            if (selected_field_ == 16) { // DRM Playback Engine
+            if (selected_field_ == 17) { // DRM Playback Engine
                 drm_engine_enabled_ = !drm_engine_enabled_;
                 return true;
             }
-            if (selected_field_ == 17) { // Download DRM in Likes
+            if (selected_field_ == 18) { // Download DRM in Likes
                 download_drm_tracks_in_likes_ = !download_drm_tracks_in_likes_;
-                return true;
-            }
-            if (selected_field_ == 18) { // Fullscreen Visualizer Mirrored
-                fullscreen_visualizer_mirrored_ = !fullscreen_visualizer_mirrored_;
                 return true;
             }
             if (selected_field_ == 19) { // Save & Apply
@@ -409,7 +432,7 @@ SettingsView::SettingsView(
         }
 
         // Forward text events to active text inputs
-        if (selected_field_ == 6) {
+        if (selected_field_ == 7) {
             if (dns_mode_idx_ == 1 && doh_provider_idx_ == 3) {
                 return doh_input_comp_->OnEvent(event);
             }
@@ -417,7 +440,7 @@ SettingsView::SettingsView(
                 return dns_input_comp_->OnEvent(event);
             }
         }
-        if (selected_field_ == 7) {
+        if (selected_field_ == 8) {
             return proxy_input_comp_->OnEvent(event);
         }
 
@@ -447,26 +470,40 @@ void SettingsView::reload_from_config() {
     fullscreen_visualizer_mirrored_ = config_.fullscreen_visualizer_mirrored;
 }
 
-bool SettingsView::is_editing_text() const {
-    if (selected_field_ == 6) {
+void SettingsView::reset_selection() {
+    selected_field_ = 0;
+}
+
+bool SettingsView::is_field_visible(int field_idx) const {
+    if (field_idx == 6) { // DoH Provider
+        return dns_mode_idx_ == 1;
+    }
+    if (field_idx == 7) { // Custom DoH URL or Custom DNS IP
         return (dns_mode_idx_ == 1 && doh_provider_idx_ == 3) || (dns_mode_idx_ == 2);
     }
+    return true;
+}
+
+bool SettingsView::is_editing_text() const {
     if (selected_field_ == 7) {
+        return (dns_mode_idx_ == 1 && doh_provider_idx_ == 3) || (dns_mode_idx_ == 2);
+    }
+    if (selected_field_ == 8) {
         return true;
     }
     return false;
 }
 
 void SettingsView::select_field(int field_idx) {
-    if (field_idx >= 0 && field_idx < 19) {
+    if (field_idx >= 0 && field_idx < kTotalFields && is_field_visible(field_idx)) {
         selected_field_ = field_idx;
-        if (selected_field_ == 6) {
-            if (dns_mode_idx_ == 1 && doh_provider_idx_ == 3) {
+        if (selected_field_ == 7) {
+            if (dns_mode_idx_ == 1) {
                 doh_cursor_pos_ = static_cast<int>(doh_url_input_.size());
             } else if (dns_mode_idx_ == 2) {
                 dns_cursor_pos_ = static_cast<int>(custom_dns_input_.size());
             }
-        } else if (selected_field_ == 7) {
+        } else if (selected_field_ == 8) {
             proxy_cursor_pos_ = static_cast<int>(proxy_url_input_.size());
         }
     }
@@ -510,15 +547,19 @@ bool SettingsView::handle_mouse_click(int y, int x) {
         state_.icon_style = static_cast<core::IconStyle>(icon_style_idx_);
         return true;
     }
-    if (field == 4) { // DNS Mode
+    if (field == 4) { // Fullscreen Visualizer Mirrored
+        fullscreen_visualizer_mirrored_ = !fullscreen_visualizer_mirrored_;
+        return true;
+    }
+    if (field == 5) { // DNS Mode
         dns_mode_idx_ = (dns_mode_idx_ + 1) % 3;
         return true;
     }
-    if (field == 5) { // DoH Provider
+    if (field == 6) { // DoH Provider
         doh_provider_idx_ = (doh_provider_idx_ + 1) % 4;
         return true;
     }
-    if (field == 8) { // Max Cache Size
+    if (field == 9) { // Max Cache Size
         int cur_idx = 2;
         for (int i = 0; i < kNumCacheSizes; ++i) {
             if (kCacheSizes[i] == max_cache_size_mb_) { cur_idx = i; break; }
@@ -527,21 +568,21 @@ bool SettingsView::handle_mouse_click(int y, int x) {
         max_cache_size_mb_ = kCacheSizes[cur_idx];
         return true;
     }
-    if (field == 9) { // Lock liked tracks in cache
+    if (field == 10) { // Lock liked tracks in cache
         lock_liked_tracks_in_cache_ = !lock_liked_tracks_in_cache_;
         return true;
     }
-    if (field == 10) { // Don't count liked in general cache
+    if (field == 11) { // Don't count liked in general cache
         dont_count_liked_in_general_cache_ = !dont_count_liked_in_general_cache_;
         return true;
     }
-    if (field == 11) { // Download all likes
+    if (field == 12) { // Download all likes
         if (on_download_all_likes_) {
             on_download_all_likes_();
         }
         return true;
     }
-    if (field == 12) { // Clear cache
+    if (field == 13) { // Clear cache
         if (on_clear_cache_) {
             on_clear_cache_(lock_liked_tracks_in_cache_);
             feedback_message_ = "Cache cleaned successfully!";
@@ -549,7 +590,7 @@ bool SettingsView::handle_mouse_click(int y, int x) {
         }
         return true;
     }
-    if (field == 13) { // Volume
+    if (field == 14) { // Volume
         if (x >= 32 && x <= 62) {
             float ratio = static_cast<float>(x - 34) / 20.0f;
             ratio = std::clamp(ratio, 0.0f, 1.0f);
@@ -561,24 +602,20 @@ bool SettingsView::handle_mouse_click(int y, int x) {
         }
         return true;
     }
-    if (field == 14) { // Discord Rich Presence
+    if (field == 15) { // Discord Rich Presence
         discord_rpc_enabled_ = !discord_rpc_enabled_;
         return true;
     }
-    if (field == 15) { // Mouse Controls
+    if (field == 16) { // Mouse Controls
         mouse_control_ = !mouse_control_;
         return true;
     }
-    if (field == 16) { // DRM Playback Engine
+    if (field == 17) { // DRM Playback Engine
         drm_engine_enabled_ = !drm_engine_enabled_;
         return true;
     }
-    if (field == 17) { // Download DRM in Likes
+    if (field == 18) { // Download DRM in Likes
         download_drm_tracks_in_likes_ = !download_drm_tracks_in_likes_;
-        return true;
-    }
-    if (field == 18) { // Fullscreen Visualizer Mirrored
-        fullscreen_visualizer_mirrored_ = !fullscreen_visualizer_mirrored_;
         return true;
     }
     if (field == 19) { // Apply Changes
@@ -713,17 +750,17 @@ Element SettingsView::render(bool is_focused) {
     auto icon_style_elem = text(icon_style_display)
         | (selected_field_ == 3 && is_focused ? color(accent) | bold : color(Color::White));
 
-    // 4. DNS Mode selector
+    // 5. DNS Mode selector
     const char* dns_modes[] = { "System Default", "DNS-over-HTTPS (DoH)", "Custom DNS Server" };
     std::string dns_mode_display = "< " + std::string(dns_modes[std::clamp(dns_mode_idx_, 0, 2)]) + " >";
     auto dns_mode_elem = text(dns_mode_display)
-        | (selected_field_ == 4 && is_focused ? color(accent) | bold : color(Color::White));
+        | (selected_field_ == 5 && is_focused ? color(accent) | bold : color(Color::White));
 
-    // 5. DoH Provider selector
+    // 6. DoH Provider selector
     const char* doh_provs[] = { "Cloudflare (1.1.1.1)", "Google (8.8.8.8)", "Quad9 (9.9.9.9)", "Custom URL" };
     std::string doh_prov_display = "< " + std::string(doh_provs[std::clamp(doh_provider_idx_, 0, 3)]) + " >";
     auto doh_prov_elem = text(doh_prov_display)
-        | (selected_field_ == 5 && is_focused ? color(accent) | bold : color(Color::White));
+        | (selected_field_ == 6 && is_focused ? color(accent) | bold : color(Color::White));
 
     auto render_input_box = [accent](const std::string& content, const std::string& placeholder, int cursor_pos, bool is_editing) -> Element {
         Element inner;
@@ -770,36 +807,36 @@ Element SettingsView::render(bool is_focused) {
         }
     };
 
-    // 6. Custom DoH URL or Custom DNS IP
+    // 7. Custom DoH URL or Custom DNS IP
     Element custom_net_elem;
     std::string custom_net_label = "Custom Server Endpoint";
-    bool field_6_editing = (selected_field_ == 6 && is_focused);
+    bool field_7_editing = (selected_field_ == 7 && is_focused);
     if (dns_mode_idx_ == 1 && doh_provider_idx_ == 3) {
         custom_net_label = "Custom DoH URL";
-        custom_net_elem = render_input_box(doh_url_input_, "https://cloudflare-dns.com/dns-query", doh_cursor_pos_, field_6_editing);
+        custom_net_elem = render_input_box(doh_url_input_, "https://cloudflare-dns.com/dns-query", doh_cursor_pos_, field_7_editing);
     } else if (dns_mode_idx_ == 2) {
         custom_net_label = "Custom DNS Server IP";
-        custom_net_elem = render_input_box(custom_dns_input_, "1.1.1.1", dns_cursor_pos_, field_6_editing);
+        custom_net_elem = render_input_box(custom_dns_input_, "1.1.1.1", dns_cursor_pos_, field_7_editing);
     } else {
         custom_net_elem = text("(Not required for current DNS mode)") | color(Color::GrayDark);
     }
 
-    // 7. Proxy URL
-    bool field_7_editing = (selected_field_ == 7 && is_focused);
-    auto proxy_elem = render_input_box(proxy_url_input_, "socks5://127.0.0.1:1080 or http://127.0.0.1:7890", proxy_cursor_pos_, field_7_editing);
+    // 8. Proxy URL
+    bool field_8_editing = (selected_field_ == 8 && is_focused);
+    auto proxy_elem = render_input_box(proxy_url_input_, "socks5://127.0.0.1:1080 or http://127.0.0.1:7890", proxy_cursor_pos_, field_8_editing);
 
-    // 8. Track Cache Settings & Liked Locking
+    // 9. Track Cache Settings & Liked Locking
     std::string max_cache_str = (max_cache_size_mb_ == 0) ? "Unlimited" : (std::to_string(max_cache_size_mb_) + " MB");
     auto cache_size_elem = text("< " + max_cache_str + " >")
-        | (selected_field_ == 8 && is_focused ? color(accent) | bold : color(Color::White));
+        | (selected_field_ == 9 && is_focused ? color(accent) | bold : color(Color::White));
 
     auto liked_lock_elem = text(lock_liked_tracks_in_cache_ ? "< Locked (Never Evict) >" : "< Unlocked >")
-        | (selected_field_ == 9 && is_focused ? color(accent) | bold : color(lock_liked_tracks_in_cache_ ? Color::GreenLight : Color::GrayLight));
+        | (selected_field_ == 10 && is_focused ? color(accent) | bold : color(lock_liked_tracks_in_cache_ ? Color::GreenLight : Color::GrayLight));
 
     auto dont_count_elem = text(dont_count_liked_in_general_cache_ ? "< Yes (Excluded from limit) >" : "< No (Counts toward limit) >")
-        | (selected_field_ == 10 && is_focused ? color(accent) | bold : color(Color::White));
+        | (selected_field_ == 11 && is_focused ? color(accent) | bold : color(Color::White));
 
-    // 11. Download All Likes to Cache button
+    // 12. Download All Likes to Cache button
     std::string download_likes_label;
     if (state_.is_downloading_likes) {
         int pct = (state_.likes_download_total > 0)
@@ -812,11 +849,11 @@ Element SettingsView::render(bool is_focused) {
         download_likes_label = " [ " + sym.likes + " Download All Likes to Cache ] ";
     }
     auto btn_download_likes = text(download_likes_label)
-        | (selected_field_ == 11 && is_focused ? bgcolor(accent) | color(Color::Black) | bold : color(Color::White));
+        | (selected_field_ == 12 && is_focused ? bgcolor(accent) | color(Color::Black) | bold : color(Color::White));
 
-    // 12. Cache Maintenance
+    // 13. Cache Maintenance
     auto btn_clean_cache = text(" [ " + sym.clean + " Clean Regular Cache (Keep Liked) ] ")
-        | (selected_field_ == 12 && is_focused ? bgcolor(accent) | color(Color::Black) | bold : color(Color::YellowLight));
+        | (selected_field_ == 13 && is_focused ? bgcolor(accent) | color(Color::Black) | bold : color(Color::YellowLight));
 
     // Cache Stats
     std::string stats_str;
@@ -830,32 +867,32 @@ Element SettingsView::render(bool is_focused) {
         stats_str = "Cache manager active";
     }
 
-    // 13. Volume (0 - 150%)
+    // 14. Volume (0 - 150%)
     auto vol_bar = gauge(volume_input_ / 150.0f) | color(volume_input_ > 100 ? Color::RGB(255, 140, 0) : accent) | size(WIDTH, EQUAL, 16);
     auto vol_elem = hbox({
-        text("< " + std::to_string(volume_input_) + "% > ") | (selected_field_ == 13 && is_focused ? color(accent) | bold : color(volume_input_ > 100 ? Color::RGB(255, 140, 0) : Color::White)),
+        text("< " + std::to_string(volume_input_) + "% > ") | (selected_field_ == 14 && is_focused ? color(accent) | bold : color(volume_input_ > 100 ? Color::RGB(255, 140, 0) : Color::White)),
         vol_bar
     });
 
-    // 14. Discord Rich Presence
+    // 15. Discord Rich Presence
     auto discord_rpc_elem = text(discord_rpc_enabled_ ? "< Enabled >" : "< Disabled >")
-        | (selected_field_ == 14 && is_focused ? color(accent) | bold : color(discord_rpc_enabled_ ? Color::GreenLight : Color::GrayLight));
+        | (selected_field_ == 15 && is_focused ? color(accent) | bold : color(discord_rpc_enabled_ ? Color::GreenLight : Color::GrayLight));
 
-    // 15. TUI Mouse Controls
+    // 16. TUI Mouse Controls
     auto mouse_ctrl_elem = text(mouse_control_ ? "< Enabled >" : "< Disabled >")
-        | (selected_field_ == 15 && is_focused ? color(accent) | bold : color(mouse_control_ ? Color::GreenLight : Color::GrayLight));
+        | (selected_field_ == 16 && is_focused ? color(accent) | bold : color(mouse_control_ ? Color::GreenLight : Color::GrayLight));
 
-    // 16. DRM Playback Engine
+    // 17. DRM Playback Engine
     auto drm_elem = text(drm_engine_enabled_ ? "< Enabled (CastLabs Daemon) >" : "< Disabled >")
-        | (selected_field_ == 16 && is_focused ? color(accent) | bold : color(drm_engine_enabled_ ? Color::GreenLight : Color::GrayLight));
+        | (selected_field_ == 17 && is_focused ? color(accent) | bold : color(drm_engine_enabled_ ? Color::GreenLight : Color::GrayLight));
 
-    // 17. Download DRM in Likes
+    // 18. Download DRM in Likes
     auto drm_download_elem = text(download_drm_tracks_in_likes_ ? "< Enabled (Non-GO tracks) >" : "< Disabled >")
-        | (selected_field_ == 17 && is_focused ? color(accent) | bold : color(download_drm_tracks_in_likes_ ? Color::GreenLight : Color::GrayLight));
+        | (selected_field_ == 18 && is_focused ? color(accent) | bold : color(download_drm_tracks_in_likes_ ? Color::GreenLight : Color::GrayLight));
 
-    // 18. Fullscreen Visualizer Mirrored
+    // 4. Fullscreen Visualizer Mirrored
     auto vis_style_elem = text(fullscreen_visualizer_mirrored_ ? "< Centered & Mirrored >" : "< Stretched (Full Width) >")
-        | (selected_field_ == 18 && is_focused ? color(accent) | bold : color(fullscreen_visualizer_mirrored_ ? Color::CyanLight : Color::White));
+        | (selected_field_ == 4 && is_focused ? color(accent) | bold : color(fullscreen_visualizer_mirrored_ ? Color::CyanLight : Color::White));
 
     // 19. Save & Apply button
     auto btn_save = text(" [ " + sym.save + " Save & Apply Settings ] ")
@@ -892,7 +929,7 @@ Element SettingsView::render(bool is_focused) {
     content.push_back(text(" " + sym.graphics + "  TERMINAL COVER ART & ICONS ") | color(Color::White) | bold);
     content.push_back(render_row(2, "Cover Art Protocol", proto_elem, "(Terminal detects: " + detected_proto_str + ")"));
     content.push_back(render_row(3, "Icon & Symbols Style", icon_style_elem, "Replace emojis with Unicode or Default ASCII symbols"));
-    content.push_back(render_row(18, "Fullscreen Visualizer", vis_style_elem, "Mirrored extends from center to edges, or stretched full width"));
+    content.push_back(render_row(4, "Fullscreen Visualizer", vis_style_elem, "Mirrored extends from center to edges, or stretched full width"));
     content.push_back(hbox({
         text("   Cover Art Option:       ") | color(Color::GrayDark),
         text("Choose 'Pixelated (Unicode Half-Block 24-bit)' to manually force pixelated cover even on Kitty/Ghostty/iTerm2.") | color(Color::GrayDark)
@@ -901,14 +938,14 @@ Element SettingsView::render(bool is_focused) {
 
     // Section: Networking & Geo-Bypass
     content.push_back(text(" " + sym.network + " NETWORKING & GEO-UNBLOCK (DNS / DoH / PROXY) ") | color(Color::White) | bold);
-    content.push_back(render_row(4, "DNS Resolution Mode", dns_mode_elem, "Bypasses ISP DNS blocking / regional tampering"));
+    content.push_back(render_row(5, "DNS Resolution Mode", dns_mode_elem, "Bypasses ISP DNS blocking / regional tampering"));
     if (dns_mode_idx_ == 1) {
-        content.push_back(render_row(5, "DoH Provider", doh_prov_elem, "Queries DNS via secure HTTPS connection"));
+        content.push_back(render_row(6, "DoH Provider", doh_prov_elem, "Queries DNS via secure HTTPS connection"));
     }
     if ((dns_mode_idx_ == 1 && doh_provider_idx_ == 3) || dns_mode_idx_ == 2) {
-        content.push_back(render_row(6, custom_net_label, custom_net_elem));
+        content.push_back(render_row(7, custom_net_label, custom_net_elem));
     }
-    content.push_back(render_row(7, "HTTP/SOCKS5 Proxy URL", proxy_elem, "e.g. socks5h://127.0.0.1:1080 for full traffic tunneling"));
+    content.push_back(render_row(8, "HTTP/SOCKS5 Proxy URL", proxy_elem, "e.g. socks5h://127.0.0.1:1080 for full traffic tunneling"));
     content.push_back(text(""));
 
     // Section: Audio & Cache
@@ -917,20 +954,20 @@ Element SettingsView::render(bool is_focused) {
         text("   Current Usage:          ") | color(Color::GrayLight),
         text(stats_str) | color(accent) | bold
     }));
-    content.push_back(render_row(8, "Max Cache Size", cache_size_elem, "Cached tracks play instantly without buffering"));
-    content.push_back(render_row(9, "Lock Liked in Cache", liked_lock_elem, "Liked tracks are pinned and never evicted"));
-    content.push_back(render_row(10, "Exclude Liked from Limit", dont_count_elem, "Liked tracks have own space and don't reduce cache quota"));
-    content.push_back(render_row(11, "Download All Likes", btn_download_likes, "Preloads audio and full metadata for all liked tracks"));
-    content.push_back(render_row(12, "Cache Maintenance", btn_clean_cache));
+    content.push_back(render_row(9, "Max Cache Size", cache_size_elem, "Cached tracks play instantly without buffering"));
+    content.push_back(render_row(10, "Lock Liked in Cache", liked_lock_elem, "Liked tracks are pinned and never evicted"));
+    content.push_back(render_row(11, "Exclude Liked from Limit", dont_count_elem, "Liked tracks have own space and don't reduce cache quota"));
+    content.push_back(render_row(12, "Download All Likes", btn_download_likes, "Preloads audio and full metadata for all liked tracks"));
+    content.push_back(render_row(13, "Cache Maintenance", btn_clean_cache));
     content.push_back(text(""));
 
     // Section: Audio Output & Integrations
     content.push_back(text(" " + sym.audio + " AUDIO ENGINE & INTEGRATIONS ") | color(Color::White) | bold);
-    content.push_back(render_row(13, "Default Volume Level", vol_elem));
-    content.push_back(render_row(14, "Discord Rich Presence", discord_rpc_elem, "Shows currently playing SoundCloud track in Discord status"));
-    content.push_back(render_row(15, "TUI Mouse Controls", mouse_ctrl_elem, "Allows controlling playback, seeking, scrolling, and tab selection with mouse"));
-    content.push_back(render_row(16, "DRM Playback Engine", drm_elem, "Uses background CastLabs Electron daemon for Widevine streams"));
-    content.push_back(render_row(17, "Download DRM in Likes", drm_download_elem, "Downloads DRM-protected tracks (non-GO) during likes download"));
+    content.push_back(render_row(14, "Default Volume Level", vol_elem));
+    content.push_back(render_row(15, "Discord Rich Presence", discord_rpc_elem, "Shows currently playing SoundCloud track in Discord status"));
+    content.push_back(render_row(16, "TUI Mouse Controls", mouse_ctrl_elem, "Allows controlling playback, seeking, scrolling, and tab selection with mouse"));
+    content.push_back(render_row(17, "DRM Playback Engine", drm_elem, "Uses background CastLabs Electron daemon for Widevine streams"));
+    content.push_back(render_row(18, "Download DRM in Likes", drm_download_elem, "Downloads DRM-protected tracks (non-GO) during likes download"));
     content.push_back(hbox({
         text("   Cache Directory:        ") | color(Color::GrayDark),
         text(config_.cache_dir) | color(Color::GrayDark)

@@ -291,9 +291,10 @@ Element QueueView::render(bool is_focused) {
             cols.push_back(text("   "));
         }
 
-        // Right-align track sequence number based on max_digits of the last track
+        // Left-align track digits at pane left side, and pad spaces after dot so titles align
         std::string num_str = std::to_string(i + 1);
-        std::string padded_num = std::string(static_cast<size_t>(std::max(0, max_digits - static_cast<int>(num_str.length()))), ' ') + num_str + ". ";
+        std::string spaces = std::string(static_cast<size_t>(std::max(0, max_digits - static_cast<int>(num_str.length()))), ' ');
+        std::string padded_num = num_str + ". " + spaces;
         cols.push_back(text(padded_num) | color(Color::GrayDark));
 
         std::string title = core::truncate_string(track.title, 26);

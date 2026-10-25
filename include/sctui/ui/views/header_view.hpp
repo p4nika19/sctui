@@ -14,6 +14,7 @@ public:
     ftxui::Element render();
 
     void focus_input();
+    void clear();
 
 private:
     models::AppState& state_;

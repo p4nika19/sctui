@@ -75,6 +75,7 @@ target("test_suite")
     add_files("src/discord/discord_rpc.cpp")
     add_files("src/audio/drm_daemon.cpp")
     add_files("src/ui/views/settings_view.cpp")
+    add_files("src/ui/views/onboarding_view.cpp")
 
     add_includedirs("include")
     add_packages("ftxui", "simdjson", "nlohmann_json", "stb")

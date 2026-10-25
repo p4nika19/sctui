@@ -146,8 +146,13 @@ core::Result<void> App::run() {
     // 4. Initialize UI views and layout
     init_ui();
 
-    // 5. Initial fetch of default trending / stream tracks
-    submit_load_view(models::ViewMode::Stream);
+    // 5. Initial fetch of default trending / stream tracks or start onboarding
+    if (config_.onboarding_completed) {
+        submit_load_view(models::ViewMode::Stream);
+    } else {
+        state_.is_onboarding = true;
+        state_.focused_panel = models::FocusPanel::Onboarding;
+    }
 
     // 6. Start FTXUI main loop
     screen_.TrackMouse(config_.mouse_control);
@@ -310,6 +315,33 @@ void App::init_ui() {
         }
     );
 
+    onboarding_view_ = std::make_unique<views::OnboardingView>(
+        state_,
+        config_,
+        [this]() {
+            state_.is_onboarding = false;
+            state_.focused_panel = models::FocusPanel::TrackList;
+            apply_network_settings();
+            core::CoverArtProcessor::clear_terminal_image(0);
+            if (discord_rpc_) {
+                discord_rpc_->set_enabled(config_.discord_rpc_enabled);
+            }
+            state_.drm_engine_enabled = config_.drm_engine_enabled;
+            state_.download_drm_tracks_in_likes = config_.download_drm_tracks_in_likes;
+            state_.mouse_control = config_.mouse_control;
+            screen_.TrackMouse(config_.mouse_control);
+            audio_.set_volume(config_.volume);
+            state_.volume_percent = static_cast<float>(config_.volume);
+            state_.icon_style = config_.icon_style;
+
+            submit_load_view(models::ViewMode::Stream);
+            state_.notify("Welcome to SCTUI! Setup completed.", false, 4);
+        },
+        [this]() {
+            trigger_auto_extract_cookies();
+        }
+    );
+
     // Composite component
     auto container = Container::Vertical({
         header_view_->get_component(),
@@ -318,7 +350,8 @@ void App::init_ui() {
             track_list_view_->get_component(),
             queue_view_->get_component(),
             account_view_->get_component(),
-            settings_view_->get_component()
+            settings_view_->get_component(),
+            onboarding_view_->get_component()
         }),
         player_view_->get_component()
     });
@@ -329,6 +362,10 @@ void App::init_ui() {
         auto dim = Terminal::Size();
         state_.terminal_width = dim.dimx;
         state_.terminal_height = dim.dimy;
+
+        if (state_.is_onboarding && onboarding_view_) {
+            return onboarding_view_->render();
+        }
 
         if (state_.is_fullscreen) {
             if (avatar_drawn_in_terminal_) {
@@ -414,6 +451,15 @@ void App::init_ui() {
 
         if (event == Event::Custom) {
             return true;
+        }
+
+        // If in Onboarding Wizard mode, forward all keyboard events directly to onboarding view
+        if (state_.is_onboarding && onboarding_view_) {
+            if (event == Event::CtrlC) {
+                request_exit();
+                return true;
+            }
+            return onboarding_view_->get_component()->OnEvent(event);
         }
 
         if (event.is_mouse()) {
@@ -708,6 +754,7 @@ void App::cycle_focus(bool reverse) {
                 }
                 break;
             case models::FocusPanel::HelpModal:
+            case models::FocusPanel::Onboarding:
                 break;
         }
     } else {
@@ -737,6 +784,7 @@ void App::cycle_focus(bool reverse) {
                 header_view_->focus_input();
                 break;
             case models::FocusPanel::HelpModal:
+            case models::FocusPanel::Onboarding:
                 break;
         }
     }
@@ -848,6 +896,13 @@ void App::submit_load_view(models::ViewMode view) {
         sidebar_view_->set_selected_row(static_cast<int>(view));
     }
 
+    if (view != models::ViewMode::Search) {
+        if (header_view_) {
+            header_view_->clear();
+        }
+        state_.search_query.clear();
+    }
+
     // Only switch focused panel if not currently navigating the Sidebar
     if (state_.focused_panel != models::FocusPanel::Sidebar) {
         if (view == models::ViewMode::Settings) {
@@ -865,6 +920,7 @@ void App::submit_load_view(models::ViewMode view) {
         state_.is_loading = false;
         if (settings_view_) {
             settings_view_->reload_from_config();
+            settings_view_->reset_selection();
         }
         return;
     }
@@ -1132,11 +1188,13 @@ void App::submit_reload_current_view(bool force_from_scratch) {
         }
         case models::ViewMode::Playlists: {
             if (state_.selected_playlist.has_value()) {
+                playlist_session_cache_.erase(state_.selected_playlist->id);
                 state_.notify("Reloading playlist: " + state_.selected_playlist->title + "...", false, 3);
                 submit_load_playlist(*state_.selected_playlist);
             } else {
                 if (force_from_scratch) {
                     state_.playlists.clear();
+                    playlist_session_cache_.clear();
                 }
                 state_.notify("Refreshing playlists...", false, 2);
                 submit_load_view(models::ViewMode::Playlists);
@@ -1176,10 +1234,21 @@ void App::submit_reload_current_view(bool force_from_scratch) {
 }
 
 void App::submit_load_playlist(models::Playlist playlist) {
-    state_.is_loading = true;
     state_.selected_playlist = playlist;
-    state_.playlist_tracks.clear();
     state_.playlist_tracks_selected_index = 0;
+
+    auto it = playlist_session_cache_.find(playlist.id);
+    if (it != playlist_session_cache_.end()) {
+        state_.playlist_tracks = it->second;
+        state_.is_loading = false;
+        state_.notify("Loaded playlist: " + playlist.title + " (" + std::to_string(it->second.size()) + " tracks)", false, 2);
+        LOG_INFO("App", "Playlist " + std::to_string(playlist.id) + " ('" + playlist.title +
+                        "') served from in-memory session cache (" + std::to_string(it->second.size()) + " tracks)");
+        return;
+    }
+
+    state_.is_loading = true;
+    state_.playlist_tracks.clear();
     LOG_INFO("App", "Loading tracks for playlist " + std::to_string(playlist.id) + " ('" + playlist.title + "')");
 
     thread_pool_.enqueue([this, playlist]() {
@@ -1718,6 +1787,9 @@ void App::process_async_events() {
                 state_.playlist_selected_index = 0;
                 break;
             case AsyncEventType::PlaylistTracksReady:
+                if (state_.selected_playlist.has_value()) {
+                    playlist_session_cache_[state_.selected_playlist->id] = evt.tracks_payload;
+                }
                 state_.playlist_tracks = std::move(evt.tracks_payload);
                 state_.playlist_tracks_selected_index = 0;
                 break;
@@ -1966,6 +2038,13 @@ bool App::handle_mouse_event(ftxui::Event event) {
             }
         }
         return true;
+    }
+
+    if (state_.is_onboarding && onboarding_view_) {
+        if (mouse.button == ftxui::Mouse::Left && mouse.motion == ftxui::Mouse::Pressed) {
+            return onboarding_view_->handle_mouse_click(mouse.y, mouse.x);
+        }
+        return false;
     }
 
     // 1. Mouse wheel scrolling

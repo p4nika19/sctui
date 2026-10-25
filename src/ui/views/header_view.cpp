@@ -1,7 +1,9 @@
 #include "sctui/ui/views/header_view.hpp"
 #include "sctui/ui/theme_symbols.hpp"
 #include <ftxui/component/component.hpp>
+#include <ftxui/component/event.hpp>
 #include <ftxui/dom/elements.hpp>
+#include <algorithm>
 
 namespace sctui::ui::views {
 
@@ -10,14 +12,40 @@ using namespace ftxui;
 HeaderView::HeaderView(models::AppState& state, std::function<void(const std::string&)> on_search_submit)
     : state_(state), on_search_submit_(std::move(on_search_submit)) {
     InputOption opt;
-    opt.on_enter = [this]() {
-        if (!state_.search_query.empty() && on_search_submit_) {
-            on_search_submit_(state_.search_query);
-        } else {
-            state_.focused_panel = models::FocusPanel::TrackList;
-        }
+    opt.multiline = true;
+    opt.on_change = [this]() {
+        state_.search_query.erase(
+            std::remove(state_.search_query.begin(), state_.search_query.end(), '\n'),
+            state_.search_query.end()
+        );
+        state_.search_query.erase(
+            std::remove(state_.search_query.begin(), state_.search_query.end(), '\r'),
+            state_.search_query.end()
+        );
     };
-    input_box_ = Input(&state_.search_query, " Search tracks, artists, sets... (Press '/' to focus)", opt);
+
+    auto raw_input = Input(&state_.search_query, " Search tracks, artists, sets... (Press '/' to focus)", opt);
+
+    // Intercept Enter key so it triggers search without inserting any line break character
+    input_box_ = CatchEvent(raw_input, [this](Event event) {
+        if (event == Event::Return) {
+            state_.search_query.erase(
+                std::remove(state_.search_query.begin(), state_.search_query.end(), '\n'),
+                state_.search_query.end()
+            );
+            state_.search_query.erase(
+                std::remove(state_.search_query.begin(), state_.search_query.end(), '\r'),
+                state_.search_query.end()
+            );
+            if (!state_.search_query.empty() && on_search_submit_) {
+                on_search_submit_(state_.search_query);
+            } else {
+                state_.focused_panel = models::FocusPanel::TrackList;
+            }
+            return true;
+        }
+        return false;
+    });
 }
 
 Component HeaderView::get_component() {
@@ -26,6 +54,10 @@ Component HeaderView::get_component() {
 
 void HeaderView::focus_input() {
     input_box_->TakeFocus();
+}
+
+void HeaderView::clear() {
+    state_.search_query.clear();
 }
 
 Element HeaderView::render() {

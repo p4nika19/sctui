@@ -36,7 +36,8 @@ enum class FocusPanel {
     Player,
     HelpModal,
     SettingsPanel,
-    AccountPanel
+    AccountPanel,
+    Onboarding
 };
 
 struct Notification {
@@ -328,6 +329,7 @@ struct AppState {
     core::IconStyle icon_style{core::IconStyle::Emoji};
     bool mouse_control{false};
     bool is_fullscreen{false};
+    bool is_onboarding{false};
     bool drm_engine_enabled{true};
     bool download_drm_tracks_in_likes{true};
 
