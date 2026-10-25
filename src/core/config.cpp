@@ -6,27 +6,57 @@
 namespace sctui::core {
 
 std::filesystem::path Config::get_default_config_path() {
+    std::filesystem::path config_file;
+    std::filesystem::path legacy_file;
     const char* xdg_config = std::getenv("XDG_CONFIG_HOME");
     if (xdg_config && *xdg_config) {
-        return std::filesystem::path(xdg_config) / "soundcloud-tui" / "config.json";
+        config_file = std::filesystem::path(xdg_config) / "sctui" / "config.json";
+        legacy_file = std::filesystem::path(xdg_config) / "soundcloud-tui" / "config.json";
+    } else {
+        const char* home = std::getenv("HOME");
+        if (home && *home) {
+            config_file = std::filesystem::path(home) / ".config" / "sctui" / "config.json";
+            legacy_file = std::filesystem::path(home) / ".config" / "soundcloud-tui" / "config.json";
+        } else {
+            return std::filesystem::current_path() / "config.json";
+        }
     }
-    const char* home = std::getenv("HOME");
-    if (home && *home) {
-        return std::filesystem::path(home) / ".config" / "soundcloud-tui" / "config.json";
+
+    // Seamless migration: If ~/.config/sctui/config.json does not exist yet,
+    // but legacy ~/.config/soundcloud-tui/config.json exists, copy it over.
+    std::error_code ec;
+    if (!std::filesystem::exists(config_file, ec) && std::filesystem::exists(legacy_file, ec)) {
+        std::filesystem::create_directories(config_file.parent_path(), ec);
+        std::filesystem::copy_file(legacy_file, config_file, std::filesystem::copy_options::skip_existing, ec);
     }
-    return std::filesystem::current_path() / "config.json";
+
+    return config_file;
 }
 
 std::filesystem::path Config::get_default_cache_path() {
+    std::filesystem::path cache_dir;
+    std::filesystem::path legacy_cache;
     const char* xdg_cache = std::getenv("XDG_CACHE_HOME");
     if (xdg_cache && *xdg_cache) {
-        return std::filesystem::path(xdg_cache) / "soundcloud-tui";
+        cache_dir = std::filesystem::path(xdg_cache) / "sctui";
+        legacy_cache = std::filesystem::path(xdg_cache) / "soundcloud-tui";
+    } else {
+        const char* home = std::getenv("HOME");
+        if (home && *home) {
+            cache_dir = std::filesystem::path(home) / ".cache" / "sctui";
+            legacy_cache = std::filesystem::path(home) / ".cache" / "soundcloud-tui";
+        } else {
+            return std::filesystem::temp_directory_path() / "sctui";
+        }
     }
-    const char* home = std::getenv("HOME");
-    if (home && *home) {
-        return std::filesystem::path(home) / ".cache" / "soundcloud-tui";
+
+    // Seamless migration: If new cache doesn't exist yet, but legacy cache does, migrate it
+    std::error_code ec;
+    if (!std::filesystem::exists(cache_dir, ec) && std::filesystem::exists(legacy_cache, ec)) {
+        std::filesystem::rename(legacy_cache, cache_dir, ec);
     }
-    return std::filesystem::temp_directory_path() / "soundcloud-tui";
+
+    return cache_dir;
 }
 
 Result<Config> Config::load(const std::filesystem::path& path) {

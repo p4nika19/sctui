@@ -8,6 +8,7 @@
 #include "sctui/core/channel.hpp"
 #include "sctui/core/thread_pool.hpp"
 #include "sctui/core/config.hpp"
+#include "sctui/core/logger.hpp"
 #include "sctui/core/entropy.hpp"
 #include "sctui/core/cover_art.hpp"
 #include "sctui/core/cookie_extractor.hpp"
@@ -1906,6 +1907,22 @@ void test_in_tab_search_and_fullscreen_shuf_bold() {
     }
 }
 
+void test_sctui_directory_paths() {
+    std::cout << "[Test] Running sctui Directory Paths & Migration verification..." << std::endl;
+
+    auto cfg_path = sctui::core::Config::get_default_config_path();
+    REQUIRE(cfg_path.string().find("sctui/config.json") != std::string::npos);
+    std::cout << "  -> Default config path verified: " << cfg_path.string() << std::endl;
+
+    auto cache_path = sctui::core::Config::get_default_cache_path();
+    REQUIRE(cache_path.string().find("sctui") != std::string::npos);
+    std::cout << "  -> Default cache path verified: " << cache_path.string() << std::endl;
+
+    auto log_path = sctui::core::Logger::get_default_log_path();
+    REQUIRE(log_path.string().find("sctui/sctui.log") != std::string::npos);
+    std::cout << "  -> Default log path verified: " << log_path.string() << std::endl;
+}
+
 int main() {
     std::cout << "=== Running sctui test suite ===" << std::endl;
     test_spsc_queue();
@@ -1939,6 +1956,7 @@ int main() {
     test_like_indicator_and_toggle_unlike();
     test_recent_improvements();
     test_in_tab_search_and_fullscreen_shuf_bold();
+    test_sctui_directory_paths();
     std::cout << "=== All tests PASSED successfully! ===" << std::endl;
     return 0;
 }

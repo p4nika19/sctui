@@ -77,12 +77,12 @@ std::filesystem::path DrmSatelliteDaemon::resolve_satellite_dir(const std::files
         candidates.push_back(dir / ".." / ".." / ".." / ".." / "satellite");
     }
 
-    // Check user config directory: ~/.config/soundcloud-tui/satellite or ~/.config/sctui/satellite
+    // Check user config directory: ~/.config/sctui/satellite or ~/.config/soundcloud-tui/satellite
     const char* home = std::getenv("HOME");
     if (home && *home) {
         candidates.push_back(std::filesystem::path(home) / ".local" / "share" / "sctui" / "satellite");
-        candidates.push_back(std::filesystem::path(home) / ".config" / "soundcloud-tui" / "satellite");
         candidates.push_back(std::filesystem::path(home) / ".config" / "sctui" / "satellite");
+        candidates.push_back(std::filesystem::path(home) / ".config" / "soundcloud-tui" / "satellite");
     }
 
     // Check system-wide shared directories

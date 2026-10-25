@@ -148,7 +148,7 @@ xmake run sctui
 
 ## ⚙️ Configuration File
 
-Configuration is saved in `~/.config/soundcloud-tui/config.json`:
+Configuration is saved in `~/.config/sctui/config.json`:
 
 ```json
 {
@@ -160,7 +160,7 @@ Configuration is saved in `~/.config/soundcloud-tui/config.json`:
     "search_limit": 20,
     "auto_extract_client_id": true,
     "accent_color": "#FF5500",
-    "cache_dir": "~/.cache/soundcloud-tui",
+    "cache_dir": "~/.cache/sctui",
     "mouse_control": false,
     "icon_style": 0,
     "fullscreen_visualizer_style": 0,

@@ -446,7 +446,7 @@ struct AudioEngine::Impl {
                 }
             }
         } else {
-            auto temp_dir = std::filesystem::temp_directory_path() / "soundcloud_tui";
+            auto temp_dir = std::filesystem::temp_directory_path() / "sctui";
             std::filesystem::create_directories(temp_dir);
             current_file_path = (temp_dir / ("track_" + std::to_string(cmd.track_id) + ".mp3")).string();
 

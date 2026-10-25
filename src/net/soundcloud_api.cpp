@@ -434,7 +434,7 @@ core::Result<SoundCloudApi::LikesPage> SoundCloudApi::get_user_likes_page(
 ) {
     if (auth_token_.empty()) {
         LOG_WARN("SoundCloudApi", "get_user_likes_page requested without auth_token");
-        return core::MakeError(core::ErrorCode::AuthError, "No auth_token configured. Add your SoundCloud oauth_token to ~/.config/soundcloud-tui/config.json to load your likes.");
+        return core::MakeError(core::ErrorCode::AuthError, "No auth_token configured. Add your SoundCloud oauth_token to ~/.config/sctui/config.json to load your likes.");
     }
 
     if (client_id_.empty()) {
@@ -528,8 +528,8 @@ core::Result<std::vector<models::Track>> SoundCloudApi::get_user_stream(
     size_t offset
 ) {
     if (auth_token_.empty()) {
-        LOG_WARN("SoundCloudApi", "get_user_stream requested without auth_token. Prompting user to add oauth_token in ~/.config/soundcloud-tui/config.json");
-        return core::MakeError(core::ErrorCode::AuthError, "No auth_token configured. Add your SoundCloud oauth_token to ~/.config/soundcloud-tui/config.json to load your stream.");
+        LOG_WARN("SoundCloudApi", "get_user_stream requested without auth_token. Prompting user to add oauth_token in ~/.config/sctui/config.json");
+        return core::MakeError(core::ErrorCode::AuthError, "No auth_token configured. Add your SoundCloud oauth_token to ~/.config/sctui/config.json to load your stream.");
     }
 
     std::string url = std::string(ApiBase) + "/stream";
@@ -556,7 +556,7 @@ core::Result<std::vector<models::Playlist>> SoundCloudApi::get_user_playlists(
 ) {
     if (auth_token_.empty()) {
         LOG_WARN("SoundCloudApi", "get_user_playlists requested without auth_token");
-        return core::MakeError(core::ErrorCode::AuthError, "No auth_token configured. Add your SoundCloud oauth_token to ~/.config/soundcloud-tui/config.json to load your playlists.");
+        return core::MakeError(core::ErrorCode::AuthError, "No auth_token configured. Add your SoundCloud oauth_token to ~/.config/sctui/config.json to load your playlists.");
     }
 
     auto uid_res = resolve_user_id();

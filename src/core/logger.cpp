@@ -20,11 +20,11 @@ Logger::~Logger() {
 std::filesystem::path Logger::get_default_log_path() {
     const char* xdg_config = std::getenv("XDG_CONFIG_HOME");
     if (xdg_config && *xdg_config) {
-        return std::filesystem::path(xdg_config) / "soundcloud-tui" / "sctui.log";
+        return std::filesystem::path(xdg_config) / "sctui" / "sctui.log";
     }
     const char* home = std::getenv("HOME");
     if (home && *home) {
-        return std::filesystem::path(home) / ".config" / "soundcloud-tui" / "sctui.log";
+        return std::filesystem::path(home) / ".config" / "sctui" / "sctui.log";
     }
     return std::filesystem::current_path() / "sctui.log";
 }

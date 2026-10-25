@@ -61,8 +61,8 @@ Usage: $0 [OPTIONS]
 
 Options:
     -y, --yes, -f, --force    Skip confirmation prompt and proceed immediately
-    --keep-config             Do not delete user configuration files (~/.config/soundcloud-tui)
-    --keep-cache              Do not delete cached audio tracks and metadata (~/.cache/soundcloud-tui)
+    --keep-config             Do not delete user configuration files (~/.config/sctui)
+    --keep-cache              Do not delete cached audio tracks and metadata (~/.cache/sctui)
     --clean-repo              Also purge build/ and node_modules/ in current repository
     -h, --help                Show this help message and exit
 
@@ -115,12 +115,12 @@ confirm_removal() {
     echo -e "  • Installed sctui binary (/usr/local/bin/sctui or ~/.local/bin/sctui)"
     echo -e "  • Widevine DRM satellite and Electron runtime (/usr/local/share/sctui or ~/.local/share/sctui)"
     if [ "$REMOVE_CONFIG" = true ]; then
-        echo -e "  • Configuration & session tokens (${XDG_CONFIG_HOME:-$HOME/.config}/soundcloud-tui)"
+        echo -e "  • Configuration & session tokens (${XDG_CONFIG_HOME:-$HOME/.config}/sctui)"
     else
         echo -e "  • Configuration: ${CYAN}Preserved (--keep-config)${NC}"
     fi
     if [ "$REMOVE_CACHE" = true ]; then
-        echo -e "  • Cached audio tracks & metadata (${XDG_CACHE_HOME:-$HOME/.cache}/soundcloud-tui)"
+        echo -e "  • Cached audio tracks & metadata (${XDG_CACHE_HOME:-$HOME/.cache}/sctui)"
     else
         echo -e "  • Track cache: ${CYAN}Preserved (--keep-cache)${NC}"
     fi
@@ -234,33 +234,49 @@ remove_satellite_resources() {
 }
 
 remove_user_data() {
-    local config_dir="${XDG_CONFIG_HOME:-$HOME/.config}/soundcloud-tui"
-    local cache_dir="${XDG_CACHE_HOME:-$HOME/.cache}/soundcloud-tui"
+    local config_dirs=(
+        "${XDG_CONFIG_HOME:-$HOME/.config}/sctui"
+        "${XDG_CONFIG_HOME:-$HOME/.config}/soundcloud-tui"
+    )
+    local cache_dirs=(
+        "${XDG_CACHE_HOME:-$HOME/.cache}/sctui"
+        "${XDG_CACHE_HOME:-$HOME/.cache}/soundcloud-tui"
+    )
 
     if [ "$REMOVE_CONFIG" = true ]; then
-        if [ -d "$config_dir" ]; then
-            rm -rf "$config_dir"
-            success "Removed user configuration & sessions: $config_dir"
-        fi
+        for cdir in "${config_dirs[@]}"; do
+            if [ -d "$cdir" ]; then
+                rm -rf "$cdir"
+                success "Removed user configuration & sessions: $cdir"
+            fi
+        done
     else
         info "Skipping user configuration (--keep-config)."
     fi
 
     if [ "$REMOVE_CACHE" = true ]; then
-        if [ -d "$cache_dir" ]; then
-            rm -rf "$cache_dir"
-            success "Removed track cache and metadata: $cache_dir"
-        fi
+        for kdir in "${cache_dirs[@]}"; do
+            if [ -d "$kdir" ]; then
+                rm -rf "$kdir"
+                success "Removed track cache and metadata: $kdir"
+            fi
+        done
     else
         info "Skipping track cache (--keep-cache)."
     fi
 
     # Remove temporary runtime directories
-    local tmp_dir="/tmp/soundcloud-tui"
-    if [ -d "$tmp_dir" ]; then
-        rm -rf "$tmp_dir"
-        success "Removed temporary runtime files: $tmp_dir"
-    fi
+    local tmp_dirs=(
+        "/tmp/sctui"
+        "/tmp/soundcloud-tui"
+        "/tmp/soundcloud_tui"
+    )
+    for tdir in "${tmp_dirs[@]}"; do
+        if [ -d "$tdir" ]; then
+            rm -rf "$tdir"
+            success "Removed temporary runtime files: $tdir"
+        fi
+    done
 
     # Clean temporary unit test artifacts if present
     rm -rf /tmp/sctui_test_* 2>/dev/null || true
