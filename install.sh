@@ -176,7 +176,8 @@ setup_satellite() {
         info "Setting up Widevine DRM Castlabs Electron satellite in ${sat_dir}..."
         (
             cd "$sat_dir"
-            if [ ! -d "node_modules" ] || ! npm list electron &>/dev/null; then
+            echo "allow-git=all" > .npmrc
+            if [ ! -f "node_modules/electron/dist/electron" ]; then
                 info "Downloading required Castlabs Electron release (v44.9.3+wvcus)..."
                 npm install --allow-git=all "https://github.com/castlabs/electron-releases#v44.9.3+wvcus" --save || {
                     warn "Automatic Castlabs Electron pre-download encountered an issue. sctui will attempt auto-download on first DRM launch."
@@ -226,6 +227,7 @@ install_system() {
         if [ -d "${script_dir}/satellite" ]; then
             $SUDO rm -rf "$share_dest"
             $SUDO cp -r "${script_dir}/satellite" "$share_dest"
+            $SUDO chmod -R a+rX "$share_dest"
         fi
     else
         mkdir -p "$(dirname "$bin_dest")" "$(dirname "$share_dest")"

@@ -14,6 +14,37 @@
 
 namespace sctui::audio {
 
+namespace {
+
+bool is_directory_writable(const std::filesystem::path& p) {
+    std::error_code ec;
+    auto cur = p;
+    while (!cur.empty()) {
+        if (std::filesystem::exists(cur, ec)) {
+            return ::access(cur.c_str(), W_OK) == 0;
+        }
+        if (!cur.has_parent_path() || cur == cur.parent_path()) {
+            break;
+        }
+        cur = cur.parent_path();
+    }
+    return true;
+}
+
+std::filesystem::path get_user_satellite_dir() {
+    const char* xdg_data = std::getenv("XDG_DATA_HOME");
+    const char* home = std::getenv("HOME");
+    if (xdg_data && *xdg_data) {
+        return std::filesystem::path(xdg_data) / "sctui" / "satellite";
+    }
+    if (home && *home) {
+        return std::filesystem::path(home) / ".local" / "share" / "sctui" / "satellite";
+    }
+    return std::filesystem::temp_directory_path() / "sctui_satellite";
+}
+
+} // anonymous namespace
+
 std::filesystem::path DrmSatelliteDaemon::resolve_satellite_dir(const std::filesystem::path& user_specified) {
     if (!user_specified.empty() && user_specified != "satellite") {
         std::error_code ec;
@@ -71,7 +102,16 @@ std::filesystem::path DrmSatelliteDaemon::resolve_satellite_dir(const std::files
         }
     }
 
-    // 2. Second priority: candidate with main.js
+    // 2. Second priority: candidate with main.js AND writable by current user
+    for (const auto& candidate : candidates) {
+        std::error_code err;
+        if (std::filesystem::exists(candidate / "main.js", err) && is_directory_writable(candidate)) {
+            auto canon = std::filesystem::canonical(candidate, err);
+            return err ? candidate : canon;
+        }
+    }
+
+    // 3. Third priority: candidate with main.js (even if read-only)
     for (const auto& candidate : candidates) {
         std::error_code err;
         if (std::filesystem::exists(candidate / "main.js", err)) {
@@ -80,7 +120,7 @@ std::filesystem::path DrmSatelliteDaemon::resolve_satellite_dir(const std::files
         }
     }
 
-    // 3. Third priority: candidate directory that exists
+    // 4. Fourth priority: candidate directory that exists
     for (const auto& candidate : candidates) {
         std::error_code err;
         if (std::filesystem::exists(candidate, err)) {
@@ -91,7 +131,7 @@ std::filesystem::path DrmSatelliteDaemon::resolve_satellite_dir(const std::files
     if (!user_specified.empty() && user_specified != "satellite") {
         return user_specified;
     }
-    return "/home/p4nika/projects/cpp/sctui/satellite";
+    return get_user_satellite_dir();
 }
 
 std::string DrmSatelliteDaemon::get_installed_electron_version(const std::filesystem::path& satellite_dir) {
@@ -177,6 +217,24 @@ bool DrmSatelliteDaemon::is_castlabs_electron_installed(const std::filesystem::p
 bool DrmSatelliteDaemon::download_castlabs_electron(const std::filesystem::path& satellite_dir, std::string* error_msg) {
     auto sat_dir = resolve_satellite_dir(satellite_dir);
     std::error_code ec;
+
+    // If sat_dir is read-only (e.g. system directory /usr/local/share/sctui/satellite),
+    // redirect download to user-writable directory (~/.local/share/sctui/satellite)
+    if (!is_directory_writable(sat_dir)) {
+        auto user_sat = get_user_satellite_dir();
+        LOG_INFO("DrmDaemon", "Candidate directory " + sat_dir.string() + " is read-only. Redirecting electron download to " + user_sat.string());
+
+        std::filesystem::create_directories(user_sat, ec);
+        // Copy existing template files from read-only sat_dir to user_sat if available
+        for (const auto& fname : {"main.js", "player.html", "preload.js", "package.json", "hls.min.js", ".npmrc"}) {
+            std::filesystem::path src = sat_dir / fname;
+            std::filesystem::path dst = user_sat / fname;
+            if (std::filesystem::exists(src, ec) && !std::filesystem::exists(dst, ec)) {
+                std::filesystem::copy_file(src, dst, std::filesystem::copy_options::overwrite_existing, ec);
+            }
+        }
+        sat_dir = user_sat;
+    }
 
     if (!std::filesystem::exists(sat_dir, ec)) {
         std::filesystem::create_directories(sat_dir, ec);
