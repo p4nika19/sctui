@@ -154,19 +154,6 @@ core::Result<void> App::run() {
     // 5. Initial fetch of default trending / stream tracks or start onboarding
     if (config_.onboarding_completed) {
         submit_load_view(models::ViewMode::Stream);
-        if (!config_.auth_token.empty()) {
-            thread_pool_.enqueue([this]() {
-                if (!is_running_) return;
-                auto page_res = api_.get_user_likes_page(200, "");
-                if (page_res && is_running_ && !page_res->tracks.empty()) {
-                    ui_event_channel_.push(AsyncUIEvent{
-                        .type = AsyncEventType::LikesTracksReady,
-                        .tracks_payload = std::move(page_res->tracks)
-                    });
-                    screen_.PostEvent(Event::Custom);
-                }
-            });
-        }
     } else {
         state_.is_onboarding = true;
         state_.focused_panel = models::FocusPanel::Onboarding;
@@ -1002,7 +989,7 @@ void App::submit_load_view(models::ViewMode view) {
         return;
     }
 
-    bool has_existing_likes = !state_.likes_tracks.empty();
+    bool has_existing_likes = !state_.likes_tracks.empty() && (likes_fully_fetched_.load() || !likes_resume_href_.empty());
     uint64_t top_like_id = has_existing_likes ? state_.likes_tracks.front().id : 0;
     std::unordered_set<uint64_t> existing_likes_set;
     if (view == models::ViewMode::Likes && has_existing_likes) {
