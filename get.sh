@@ -39,7 +39,7 @@ else
 fi
 
 if [ -e /dev/tty ]; then
-    exec bash "$TMP_DIR/install.sh" "$@" </dev/tty
+    bash "$TMP_DIR/install.sh" "$@" </dev/tty
 else
-    exec bash "$TMP_DIR/install.sh" "$@"
+    bash "$TMP_DIR/install.sh" "$@"
 fi

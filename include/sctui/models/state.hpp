@@ -62,7 +62,7 @@ struct QueueState {
         return std::nullopt;
     }
 
-    void rebuild_shuffle() {
+    void rebuild_shuffle(bool avoid_current_at_start = false) {
         if (tracks.empty()) {
             shuffle_indices.clear();
             shuffle_cursor = 0;
@@ -77,10 +77,14 @@ struct QueueState {
             auto rng = core::AdvancedRng::create_engine();
             std::shuffle(shuffle_indices.begin(), shuffle_indices.end(), rng);
 
-            // Anchor the currently playing track at position 0 so playback continues without interruption
             if (current_index >= 0 && static_cast<size_t>(current_index) < tracks.size()) {
                 auto it = std::find(shuffle_indices.begin(), shuffle_indices.end(), static_cast<size_t>(current_index));
-                if (it != shuffle_indices.end() && it != shuffle_indices.begin()) {
+                if (avoid_current_at_start) {
+                    if (it == shuffle_indices.begin()) {
+                        std::iter_swap(it, it + 1);
+                    }
+                } else if (it != shuffle_indices.end() && it != shuffle_indices.begin()) {
+                    // Anchor the currently playing track at position 0 so playback continues without interruption
                     std::iter_swap(shuffle_indices.begin(), it);
                 }
             }
@@ -231,14 +235,17 @@ struct QueueState {
                 rebuild_shuffle();
             }
             if (!shuffle_indices.empty()) {
-                if (shuffle_cursor + 1 < shuffle_indices.size()) {
+                if (current_index < 0 || static_cast<size_t>(current_index) >= tracks.size()) {
+                    shuffle_cursor = 0;
+                    current_index = static_cast<int>(shuffle_indices[shuffle_cursor]);
+                } else if (shuffle_cursor + 1 < shuffle_indices.size()) {
                     shuffle_cursor++;
                     current_index = static_cast<int>(shuffle_indices[shuffle_cursor]);
                 } else if (repeat_mode == core::RepeatMode::All) {
-                    rebuild_shuffle();
+                    rebuild_shuffle(true);
                     current_index = static_cast<int>(shuffle_indices[0]);
                 } else {
-                    current_index = -1; // Finished queue
+                    current_index = -1;
                 }
                 return;
             }

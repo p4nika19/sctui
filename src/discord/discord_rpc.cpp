@@ -24,6 +24,16 @@ uint64_t current_epoch_seconds() {
     );
 }
 
+std::string truncate_utf8(std::string value, size_t max_bytes) {
+    if (value.size() <= max_bytes) return value;
+    size_t end = max_bytes;
+    while (end > 0 && (static_cast<unsigned char>(value[end]) & 0xC0) == 0x80) {
+        end--;
+    }
+    value.resize(end);
+    return value;
+}
+
 std::vector<std::string> get_candidate_socket_paths() {
     std::vector<std::string> dirs;
     const char* xdg_runtime = std::getenv("XDG_RUNTIME_DIR");
@@ -219,59 +229,59 @@ std::string DiscordRpc::build_activity_payload(
     uint64_t position_ms,
     uint64_t duration_ms
 ) {
-    nlohmann::json activity;
+    try {
+        nlohmann::json activity;
 
-    // Track Title and Artist Name
-    std::string title = !track.title.empty() ? track.title : "SoundCloud Track";
-    std::string artist = !track.artist.empty() ? track.artist : "SoundCloud Artist";
+        std::string title = !track.title.empty() ? track.title : "SoundCloud Track";
+        std::string artist = !track.artist.empty() ? track.artist : "SoundCloud Artist";
+        if (title.length() < 2) title += " ";
+        if (artist.length() < 2) artist += " ";
+        title = truncate_utf8(std::move(title), 120);
+        artist = truncate_utf8(std::move(artist), 120);
 
-    if (title.length() < 2) title += " ";
-    if (artist.length() < 2) artist += " ";
+        activity["name"] = "SoundCloud";
+        activity["type"] = 2;
+        activity["details"] = title;
+        activity["state"] = "by " + artist;
 
-    if (title.length() > 120) title = title.substr(0, 120);
-    if (artist.length() > 120) artist = artist.substr(0, 120);
+        const uint64_t now_sec = current_epoch_seconds();
+        const uint64_t elapsed_sec = position_ms / 1000;
+        const uint64_t dur_sec = duration_ms / 1000;
 
-    activity["name"] = "SoundCloud";
-    activity["type"] = 2; // Type 2 = Listening to
-    activity["details"] = title;
-    activity["state"] = "by " + artist;
-
-    uint64_t now_sec = current_epoch_seconds();
-    uint64_t elapsed_sec = position_ms / 1000;
-    uint64_t dur_sec = duration_ms / 1000;
-
-    if (playback_state == audio::PlaybackState::Playing) {
-        uint64_t start_sec = (now_sec >= elapsed_sec) ? (now_sec - elapsed_sec) : now_sec;
-        activity["timestamps"]["start"] = start_sec;
-        if (dur_sec > elapsed_sec) {
-            activity["timestamps"]["end"] = start_sec + dur_sec;
+        if (playback_state == audio::PlaybackState::Playing) {
+            const uint64_t start_sec = (now_sec >= elapsed_sec) ? (now_sec - elapsed_sec) : now_sec;
+            activity["timestamps"]["start"] = start_sec;
+            if (dur_sec > elapsed_sec) {
+                activity["timestamps"]["end"] = start_sec + dur_sec;
+            }
         }
+
+        if (!track.artwork_url.empty() && track.artwork_url.starts_with("https://")) {
+            activity["assets"]["large_image"] = core::CoverArtProcessor::upgrade_artwork_url(track.artwork_url);
+        } else {
+            activity["assets"]["large_image"] = "soundcloud";
+        }
+        activity["assets"]["large_text"] = truncate_utf8(title + " • " + artist, 128);
+        activity["assets"]["small_image"] = "waves";
+        activity["assets"]["small_text"] = (playback_state == audio::PlaybackState::Playing) ? "Playing" : "Paused";
+
+        if (!track.permalink_url.empty() && track.permalink_url.starts_with("https://")) {
+            nlohmann::json btn;
+            btn["label"] = "Listen on SoundCloud";
+            btn["url"] = track.permalink_url;
+            activity["buttons"] = nlohmann::json::array({ std::move(btn) });
+        }
+
+        nlohmann::json root;
+        root["cmd"] = "SET_ACTIVITY";
+        root["args"]["pid"] = getpid();
+        root["args"]["activity"] = std::move(activity);
+        root["nonce"] = std::to_string(now_sec);
+        return root.dump();
+    } catch (const std::exception& e) {
+        LOG_WARN("DiscordRpc", "Failed to build activity payload: " + std::string(e.what()));
+        return {};
     }
-
-    // High-resolution artwork URL or official registered Discord asset
-    if (!track.artwork_url.empty() && track.artwork_url.starts_with("https://")) {
-        activity["assets"]["large_image"] = core::CoverArtProcessor::upgrade_artwork_url(track.artwork_url);
-    } else {
-        activity["assets"]["large_image"] = "soundcloud";
-    }
-    activity["assets"]["large_text"] = title + " • " + artist;
-    activity["assets"]["small_image"] = "waves";
-    activity["assets"]["small_text"] = (playback_state == audio::PlaybackState::Playing) ? "Playing" : "Paused";
-
-    if (!track.permalink_url.empty() && track.permalink_url.starts_with("https://")) {
-        nlohmann::json btn;
-        btn["label"] = "Listen on SoundCloud";
-        btn["url"] = track.permalink_url;
-        activity["buttons"] = nlohmann::json::array({ std::move(btn) });
-    }
-
-    nlohmann::json root;
-    root["cmd"] = "SET_ACTIVITY";
-    root["args"]["pid"] = getpid();
-    root["args"]["activity"] = std::move(activity);
-    root["nonce"] = std::to_string(now_sec);
-
-    return root.dump();
 }
 
 void DiscordRpc::update_presence(
@@ -299,6 +309,7 @@ void DiscordRpc::update_presence(
     if (!connected_) return;
 
     std::string payload = build_activity_payload(*track, playback_state, position_ms, duration_ms);
+    if (payload.empty()) return;
     if (send_frame(1, payload)) {
         last_track_id_ = track->id;
         last_state_ = playback_state;

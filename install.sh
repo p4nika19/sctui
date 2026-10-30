@@ -304,20 +304,27 @@ install_system() {
         mkdir -p "$HOME/.local/bin" "$HOME/.local/share/sctui"
     fi
 
+    local assets_dest="$(dirname "$share_dest")/assets"
     if [ "$use_sudo" = true ]; then
-        $SUDO mkdir -p "/usr/local/bin" "/usr/local/share/sctui"
+        $SUDO mkdir -p "/usr/local/bin" "/usr/local/share/sctui" "$assets_dest"
         $SUDO install -m 755 "$bin_source" "$bin_dest"
         if [ -d "${PROJECT_DIR}/satellite" ]; then
             $SUDO rm -rf "$share_dest"
             $SUDO cp -r "${PROJECT_DIR}/satellite" "$share_dest"
             $SUDO chmod -R a+rX "$share_dest"
         fi
+        if [ -f "${PROJECT_DIR}/assets/preview_cover.jpg" ]; then
+            $SUDO install -m 644 "${PROJECT_DIR}/assets/preview_cover.jpg" "$assets_dest/preview_cover.jpg"
+        fi
     else
-        mkdir -p "$(dirname "$bin_dest")" "$(dirname "$share_dest")"
+        mkdir -p "$(dirname "$bin_dest")" "$(dirname "$share_dest")" "$assets_dest"
         install -m 755 "$bin_source" "$bin_dest"
         if [ -d "${PROJECT_DIR}/satellite" ]; then
             rm -rf "$share_dest"
             cp -r "${PROJECT_DIR}/satellite" "$share_dest"
+        fi
+        if [ -f "${PROJECT_DIR}/assets/preview_cover.jpg" ]; then
+            install -m 644 "${PROJECT_DIR}/assets/preview_cover.jpg" "$assets_dest/preview_cover.jpg"
         fi
     fi
 

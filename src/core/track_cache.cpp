@@ -5,6 +5,7 @@
 #include <fstream>
 #include <chrono>
 #include <algorithm>
+#include <unordered_set>
 #include <nlohmann/json.hpp>
 
 namespace sctui::core {
@@ -177,21 +178,19 @@ std::optional<std::filesystem::path> TrackCacheManager::get_cached_track(uint64_
 }
 
 void TrackCacheManager::register_track(const models::Track& track) {
-    std::lock_guard<std::mutex> lock(mutex_);
     std::filesystem::path path = get_track_cache_path(track.id);
-
-    std::error_code ec;
-    uint64_t sz = 0;
-    if (std::filesystem::exists(path, ec)) {
-        sz = std::filesystem::file_size(path, ec);
-    }
-
-    // Download/save cover art
     std::filesystem::path cover_dest = get_cover_cache_path(track.id);
+    std::error_code ec;
     if (!std::filesystem::exists(cover_dest, ec) || std::filesystem::file_size(cover_dest, ec) < 500) {
         if (!track.artwork_url.empty()) {
             download_cover_art(track);
         }
+    }
+
+    std::lock_guard<std::mutex> lock(mutex_);
+    uint64_t sz = 0;
+    if (std::filesystem::exists(path, ec)) {
+        sz = std::filesystem::file_size(path, ec);
     }
 
     auto info = CachedTrackInfo::from_track(track, path, sz, current_epoch_seconds());
@@ -283,7 +282,10 @@ std::optional<models::Track> TrackCacheManager::get_cached_track_metadata(uint64
 
 bool TrackCacheManager::is_track_cached(uint64_t track_id) const {
     std::lock_guard<std::mutex> lock(mutex_);
-    return tracks_.find(track_id) != tracks_.end();
+    if (!tracks_.contains(track_id)) return false;
+    std::error_code ec;
+    const auto path = get_track_cache_path(track_id);
+    return std::filesystem::is_regular_file(path, ec) && std::filesystem::file_size(path, ec) > 1024;
 }
 
 void TrackCacheManager::update_track_liked(uint64_t track_id, bool is_liked) {
@@ -296,10 +298,10 @@ void TrackCacheManager::update_track_liked(uint64_t track_id, bool is_liked) {
 }
 
 void TrackCacheManager::sync_liked_tracks(const std::vector<uint64_t>& liked_ids) {
+    const std::unordered_set<uint64_t> liked_set(liked_ids.begin(), liked_ids.end());
     std::lock_guard<std::mutex> lock(mutex_);
     for (auto& [id, info] : tracks_) {
-        bool liked = (std::find(liked_ids.begin(), liked_ids.end(), id) != liked_ids.end());
-        info.is_liked = liked;
+        info.is_liked = liked_set.contains(id);
     }
     save_metadata();
 }
@@ -369,7 +371,7 @@ void TrackCacheManager::enforce_cache_limits(
         auto it = tracks_.find(best_id);
         if (it != tracks_.end()) {
             std::error_code ec;
-            std::filesystem::remove(it->second.file_path, ec);
+            std::filesystem::remove(get_track_cache_path(best_id), ec);
             std::filesystem::remove(get_cover_cache_path(best_id), ec);
             std::filesystem::remove(get_metadata_cache_path(best_id), ec);
             LOG_INFO("TrackCache", "Evicted old cached track " + std::to_string(best_id) +
@@ -392,7 +394,7 @@ void TrackCacheManager::clear_cache(bool keep_liked) {
             continue;
         }
         std::error_code ec;
-        std::filesystem::remove(t.file_path, ec);
+        std::filesystem::remove(get_track_cache_path(id), ec);
         std::filesystem::remove(get_cover_cache_path(id), ec);
         std::filesystem::remove(get_metadata_cache_path(id), ec);
         to_remove.push_back(id);
@@ -493,19 +495,18 @@ void TrackCacheManager::load_metadata() {
                 info.monetization_model = item.value("monetization_model", "");
                 info.is_snipped = item.value("is_snipped", false);
 
-                info.file_path = item.value("file_path", "");
-                info.cover_file_path = item.value("cover_file_path", "");
-                if (info.cover_file_path.empty()) {
-                    auto cov = get_cover_cache_path(info.track_id);
-                    if (std::filesystem::exists(cov, ec)) {
-                        info.cover_file_path = cov;
-                    }
+                info.file_path = get_track_cache_path(info.track_id);
+                auto cov = get_cover_cache_path(info.track_id);
+                if (std::filesystem::exists(cov, ec)) {
+                    info.cover_file_path = cov;
                 }
-                info.size_bytes = item.value("size_bytes", 0ULL);
                 info.last_accessed = item.value("last_accessed", 0ULL);
 
-                if (std::filesystem::exists(info.file_path, ec) && std::filesystem::file_size(info.file_path, ec) > 1024) {
-                    tracks_[info.track_id] = std::move(info);
+                if (std::filesystem::is_regular_file(info.file_path, ec)) {
+                    info.size_bytes = std::filesystem::file_size(info.file_path, ec);
+                    if (!ec && info.size_bytes > 1024) {
+                        tracks_[info.track_id] = std::move(info);
+                    }
                 }
             }
         }
@@ -548,10 +549,24 @@ void TrackCacheManager::save_metadata() {
             j["tracks"][std::to_string(id)] = std::move(item);
         }
 
-        std::ofstream file(metadata_file_);
-        if (file.is_open()) {
-            file << j.dump(2) << std::endl;
+        std::filesystem::path temp_file = metadata_file_;
+        temp_file += ".tmp";
+        {
+            std::ofstream file(temp_file, std::ios::trunc);
+            if (!file.is_open()) return;
+            file << j.dump(2) << '\n';
+            file.flush();
+            if (!file) {
+                file.close();
+                std::error_code ec;
+                std::filesystem::remove(temp_file, ec);
+                return;
+            }
         }
+
+        std::error_code ec;
+        std::filesystem::rename(temp_file, metadata_file_, ec);
+        if (ec) std::filesystem::remove(temp_file, ec);
     } catch (...) {}
 }
 

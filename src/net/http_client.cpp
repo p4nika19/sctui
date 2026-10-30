@@ -2,8 +2,36 @@
 #include <curl/curl.h>
 #include <sstream>
 #include <iostream>
+#include <algorithm>
+#include <cctype>
+#include <mutex>
+#include <string_view>
 
 namespace sctui::net {
+
+namespace {
+
+bool is_trusted_soundcloud_url(const std::string& url) {
+    constexpr std::string_view scheme = "https://";
+    if (!url.starts_with(scheme)) return false;
+
+    const size_t authority_begin = scheme.size();
+    const size_t authority_end = url.find_first_of("/?#", authority_begin);
+    std::string authority = url.substr(authority_begin, authority_end - authority_begin);
+    if (const size_t userinfo = authority.rfind('@'); userinfo != std::string::npos) {
+        authority.erase(0, userinfo + 1);
+    }
+    if (const size_t port = authority.rfind(':'); port != std::string::npos) {
+        authority.erase(port);
+    }
+    std::transform(authority.begin(), authority.end(), authority.begin(), [](unsigned char c) {
+        return static_cast<char>(std::tolower(c));
+    });
+    return authority == "soundcloud.com" ||
+           (authority.size() > 13 && authority.ends_with(".soundcloud.com"));
+}
+
+} // namespace
 
 struct HttpClient::Impl {
     std::string user_agent{"Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36"};
@@ -55,11 +83,10 @@ struct HttpClient::Impl {
 };
 
 HttpClient::HttpClient() : impl_(std::make_unique<Impl>()) {
-    static bool curl_initialized = false;
-    if (!curl_initialized) {
-        curl_global_init(CURL_GLOBAL_ALL);
-        curl_initialized = true;
-    }
+    static std::once_flag curl_init_flag;
+    std::call_once(curl_init_flag, []() {
+        (void)curl_global_init(CURL_GLOBAL_ALL);
+    });
 }
 
 HttpClient::~HttpClient() = default;
@@ -144,7 +171,8 @@ core::Result<HttpResponse> HttpClient::get(
         chunk = curl_slist_append(chunk, header_line.c_str());
     }
 
-    if (!impl_->bearer_token.empty() && headers.find("Authorization") == headers.end()) {
+    if (is_trusted_soundcloud_url(final_url) && !impl_->bearer_token.empty() &&
+        headers.find("Authorization") == headers.end()) {
         std::string auth_header = "Authorization: OAuth " + impl_->bearer_token;
         chunk = curl_slist_append(chunk, auth_header.c_str());
     }
@@ -165,28 +193,8 @@ core::Result<HttpResponse> HttpClient::get(
     curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 10L);
     curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
     curl_easy_setopt(curl, CURLOPT_MAXREDIRS, 10L);
-
-    if (!impl_->doh_url.empty()) {
-        curl_easy_setopt(curl, CURLOPT_DOH_URL, impl_->doh_url.c_str());
-    }
-    if (!impl_->dns_servers.empty()) {
-        curl_easy_setopt(curl, CURLOPT_DNS_SERVERS, impl_->dns_servers.c_str());
-    }
-    if (!impl_->proxy.empty()) {
-        curl_easy_setopt(curl, CURLOPT_PROXY, impl_->proxy.c_str());
-    }
     curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 1L);
     curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 2L);
-
-    if (!impl_->doh_url.empty()) {
-        curl_easy_setopt(curl, CURLOPT_DOH_URL, impl_->doh_url.c_str());
-    }
-    if (!impl_->dns_servers.empty()) {
-        curl_easy_setopt(curl, CURLOPT_DNS_SERVERS, impl_->dns_servers.c_str());
-    }
-    if (!impl_->proxy.empty()) {
-        curl_easy_setopt(curl, CURLOPT_PROXY, impl_->proxy.c_str());
-    }
 
     if (chunk) {
         curl_easy_setopt(curl, CURLOPT_HTTPHEADER, chunk);
@@ -257,6 +265,9 @@ core::Result<HttpResponse> HttpClient::get_stream(
     curl_easy_setopt(curl, CURLOPT_USERAGENT, impl_->user_agent.c_str());
     curl_easy_setopt(curl, CURLOPT_TIMEOUT, 0L); // Streaming could take entire song length
     curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 15L);
+    curl_easy_setopt(curl, CURLOPT_LOW_SPEED_LIMIT, 1L);
+    curl_easy_setopt(curl, CURLOPT_LOW_SPEED_TIME, 30L);
+    curl_easy_setopt(curl, CURLOPT_FAILONERROR, 1L);
     curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
     curl_easy_setopt(curl, CURLOPT_MAXREDIRS, 10L);
 
@@ -314,7 +325,7 @@ core::Result<HttpResponse> HttpClient::post(
         chunk = curl_slist_append(chunk, header_line.c_str());
     }
 
-    if (!impl_->bearer_token.empty() && headers.find("Authorization") == headers.end()) {
+    if (is_trusted_soundcloud_url(url) && !impl_->bearer_token.empty() && headers.find("Authorization") == headers.end()) {
         std::string auth_header = "Authorization: OAuth " + impl_->bearer_token;
         chunk = curl_slist_append(chunk, auth_header.c_str());
     }
@@ -378,7 +389,7 @@ core::Result<HttpResponse> HttpClient::del(
         chunk = curl_slist_append(chunk, header_line.c_str());
     }
 
-    if (!impl_->bearer_token.empty() && headers.find("Authorization") == headers.end()) {
+    if (is_trusted_soundcloud_url(url) && !impl_->bearer_token.empty() && headers.find("Authorization") == headers.end()) {
         std::string auth_header = "Authorization: OAuth " + impl_->bearer_token;
         chunk = curl_slist_append(chunk, auth_header.c_str());
     }

@@ -4,6 +4,7 @@
 #include <iostream>
 #include <thread>
 #include <chrono>
+#include <cctype>
 #include <unordered_set>
 #include <nlohmann/json.hpp>
 
@@ -13,6 +14,10 @@ namespace {
     // Verified fallback SoundCloud Web client_id
     constexpr const char* FallbackClientId = "iZIs9mchVcX5lhVR1EzGCcyUbdafLnoP";
     constexpr const char* ApiBase = "https://api-v2.soundcloud.com";
+
+    int http_status(const core::Result<HttpResponse>& response) {
+        return response ? response->status_code : response.error().http_status;
+    }
 
     models::Track parse_track_object(const nlohmann::json& track_obj) {
         models::Track track;
@@ -161,6 +166,7 @@ const std::string& SoundCloudApi::get_client_id() const noexcept {
 
 void SoundCloudApi::set_auth_token(std::string token) {
     auth_token_ = std::move(token);
+    user_id_ = 0;
     http_.set_bearer_token(auth_token_);
 }
 
@@ -347,7 +353,7 @@ core::Result<models::UserProfile> SoundCloudApi::get_me() {
                 std::string pid = cs["product"].value("id", "free");
                 profile.consumer_subscription_id = pid;
                 std::string lower_pid = pid;
-                std::transform(lower_pid.begin(), lower_pid.end(), lower_pid.begin(), ::tolower);
+                std::transform(lower_pid.begin(), lower_pid.end(), lower_pid.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
                 if (lower_pid.find("high") != std::string::npos || lower_pid.find("go-plus") != std::string::npos ||
                     lower_pid.find("go_plus") != std::string::npos || lower_pid.find("goplus") != std::string::npos) {
                     profile.subscription_tier = models::SubscriptionTier::GoPlus;
@@ -360,7 +366,7 @@ core::Result<models::UserProfile> SoundCloudApi::get_me() {
         }
         if (profile.subscription_tier == models::SubscriptionTier::Free && !profile.plan.empty()) {
             std::string lower_plan = profile.plan;
-            std::transform(lower_plan.begin(), lower_plan.end(), lower_plan.begin(), ::tolower);
+            std::transform(lower_plan.begin(), lower_plan.end(), lower_plan.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
             if (lower_plan.find("go+") != std::string::npos || lower_plan.find("go plus") != std::string::npos || lower_plan.find("goplus") != std::string::npos) {
                 profile.subscription_tier = models::SubscriptionTier::GoPlus;
             } else if (lower_plan.find("go") != std::string::npos) {
@@ -470,13 +476,13 @@ core::Result<SoundCloudApi::LikesPage> SoundCloudApi::get_user_likes_page(
         if (resp && resp->is_2xx()) {
             break;
         }
-        if (resp && (resp->status_code == 401 || resp->status_code == 403)) {
+        if (http_status(resp) == 401 || http_status(resp) == 403) {
             (void)resolve_client_id();
             if (!client_id_.empty()) {
                 params["client_id"] = client_id_;
             }
         }
-        int delay = (resp && resp->status_code == 429) ? (1200 * (attempt + 1)) : (350 * (attempt + 1));
+        int delay = (http_status(resp) == 429) ? (1200 * (attempt + 1)) : (350 * (attempt + 1));
         std::this_thread::sleep_for(std::chrono::milliseconds(delay));
     }
 
@@ -635,13 +641,13 @@ core::Result<std::vector<models::Track>> SoundCloudApi::get_playlist_tracks(uint
         if (resp && resp->is_2xx()) {
             break;
         }
-        if (resp && (resp->status_code == 401 || resp->status_code == 403)) {
+        if (http_status(resp) == 401 || http_status(resp) == 403) {
             (void)resolve_client_id();
             if (!client_id_.empty()) {
                 params["client_id"] = client_id_;
             }
         }
-        int delay = (resp && resp->status_code == 429) ? (1000 * (attempt + 1)) : (300 * (attempt + 1));
+        int delay = (http_status(resp) == 429) ? (1000 * (attempt + 1)) : (300 * (attempt + 1));
         std::this_thread::sleep_for(std::chrono::milliseconds(delay));
     }
 
@@ -693,13 +699,13 @@ core::Result<std::vector<models::Track>> SoundCloudApi::get_playlist_tracks(uint
                 if (batch_resp && batch_resp->is_2xx()) {
                     break;
                 }
-                if (batch_resp && (batch_resp->status_code == 401 || batch_resp->status_code == 403)) {
+                if (http_status(batch_resp) == 401 || http_status(batch_resp) == 403) {
                     (void)resolve_client_id();
                     if (!client_id_.empty()) {
                         batch_params["client_id"] = client_id_;
                     }
                 }
-                int delay = (batch_resp && batch_resp->status_code == 429) ? (1500 * (attempt + 1)) : (400 * (attempt + 1));
+                int delay = (http_status(batch_resp) == 429) ? (1500 * (attempt + 1)) : (400 * (attempt + 1));
                 std::this_thread::sleep_for(std::chrono::milliseconds(delay));
             }
 
@@ -722,7 +728,7 @@ core::Result<std::vector<models::Track>> SoundCloudApi::get_playlist_tracks(uint
         for (uint64_t tid : track_order) {
             auto it = resolved_map.find(tid);
             if (it != resolved_map.end()) {
-                final_tracks.push_back(std::move(it->second));
+                final_tracks.push_back(it->second);
             }
         }
 
@@ -755,11 +761,11 @@ core::Result<models::Track> SoundCloudApi::get_track_details(uint64_t track_id) 
     for (int attempt = 0; attempt < 3; ++attempt) {
         resp = http_.get(url, {}, params);
         if (resp && resp->is_2xx()) break;
-        if (resp && (resp->status_code == 401 || resp->status_code == 403)) {
+        if (http_status(resp) == 401 || http_status(resp) == 403) {
             (void)resolve_client_id();
             if (!client_id_.empty()) params["client_id"] = client_id_;
         }
-        int delay = (resp && resp->status_code == 429) ? (1000 * (attempt + 1)) : (300 * (attempt + 1));
+        int delay = (http_status(resp) == 429) ? (1000 * (attempt + 1)) : (300 * (attempt + 1));
         std::this_thread::sleep_for(std::chrono::milliseconds(delay));
     }
 

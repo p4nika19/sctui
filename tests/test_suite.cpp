@@ -25,6 +25,8 @@
 #include "sctui/ui/views/queue_view.hpp"
 #include <fstream>
 #include <set>
+#include <stdexcept>
+#include <sys/stat.h>
 #include <nlohmann/json.hpp>
 
 #define REQUIRE(expr) do { \
@@ -787,6 +789,32 @@ void test_track_cache_manager() {
     REQUIRE(!mgr.get_cached_track(102).has_value());
     std::cout << "  -> clear_cache(keep_liked=false) purged all tracks OK" << std::endl;
 
+    const auto incomplete = mgr.get_track_cache_path(104);
+    make_dummy_file(incomplete, 1024);
+    mgr.register_track(104);
+    REQUIRE(!mgr.is_track_cached(104));
+    REQUIRE(!mgr.get_cached_track(104).has_value());
+
+    const auto external = std::filesystem::temp_directory_path() / "sctui_cache_external_file.mp3";
+    make_dummy_file(external, 4096);
+    nlohmann::json external_metadata;
+    external_metadata["tracks"]["55"]["track_id"] = 55;
+    external_metadata["tracks"]["55"]["file_path"] = external.string();
+    external_metadata["tracks"]["55"]["size_bytes"] = 4096;
+    {
+        std::ofstream metadata(test_dir / "tracks" / "metadata.json");
+        metadata << external_metadata.dump();
+    }
+    {
+        sctui::core::TrackCacheManager reloaded(test_dir);
+        REQUIRE(!reloaded.is_track_cached(55));
+        REQUIRE(!reloaded.get_cached_track(55).has_value());
+        reloaded.clear_cache(false);
+        REQUIRE(std::filesystem::exists(external));
+    }
+    std::filesystem::remove(external);
+    std::cout << "  -> Incomplete files rejected and external metadata paths confined OK" << std::endl;
+
     std::filesystem::remove_all(test_dir);
 }
 
@@ -969,6 +997,22 @@ void test_discord_rpc_integration() {
     REQUIRE(payload.find("timestamps") != std::string::npos);
     REQUIRE(payload.find("Playing") != std::string::npos);
     std::cout << "  -> Rich Presence SET_ACTIVITY frame formatting OK" << std::endl;
+
+    track.title = std::string(119, 'a') + "é" + "truncated";
+    track.artist = std::string(117, 'b') + "🎵" + "truncated";
+    const std::string utf8_payload = sctui::discord::DiscordRpc::build_activity_payload(
+        track, sctui::audio::PlaybackState::Paused, 0, 180000
+    );
+    REQUIRE(!utf8_payload.empty());
+    const auto activity_json = nlohmann::json::parse(utf8_payload);
+    REQUIRE(activity_json["args"]["activity"]["details"].get<std::string>().size() == 119);
+    REQUIRE(activity_json["args"]["activity"]["assets"]["large_text"].get<std::string>().size() <= 128);
+
+    track.title = std::string("\xF0\x28\x8C\x28", 4);
+    REQUIRE(sctui::discord::DiscordRpc::build_activity_payload(
+        track, sctui::audio::PlaybackState::Paused, 0, 180000
+    ).empty());
+    std::cout << "  -> Rich Presence preserves UTF-8 boundaries and contains invalid input OK" << std::endl;
 
     // Test Config serialization of discord_rpc_enabled
     sctui::core::Config cfg;
@@ -1313,6 +1357,7 @@ void test_thread_pool() {
     std::cout << "[Test] Running ThreadPool verification..." << std::endl;
     sctui::core::ThreadPool pool(4);
     std::atomic<int> counter{0};
+    pool.enqueue([]() { throw std::runtime_error("intentional worker exception"); });
     for (int i = 0; i < 20; ++i) {
         pool.enqueue([&counter]() {
             counter.fetch_add(1, std::memory_order_relaxed);
@@ -1320,7 +1365,79 @@ void test_thread_pool() {
     }
     pool.shutdown();
     REQUIRE(counter.load() == 20);
-    std::cout << "  -> ThreadPool dispatched 20 tasks and shutdown cleanly OK" << std::endl;
+    pool.enqueue([&counter]() { counter.fetch_add(1, std::memory_order_relaxed); });
+    pool.shutdown();
+    REQUIRE(counter.load() == 20);
+    std::cout << "  -> ThreadPool contained exceptions, drained work, and rejected post-shutdown tasks OK" << std::endl;
+}
+
+void test_queue_edge_cases() {
+    std::cout << "[Test] Running Shuffle Queue boundary regressions..." << std::endl;
+    sctui::models::QueueState queue;
+    for (uint64_t id = 1; id <= 3; ++id) {
+        sctui::models::Track track;
+        track.id = id;
+        queue.tracks.push_back(track);
+    }
+
+    queue.shuffle = true;
+    queue.rebuild_shuffle();
+    queue.current_index = -1;
+    queue.advance_next();
+    REQUIRE(queue.current_index >= 0);
+    REQUIRE(queue.shuffle_cursor == 0);
+    REQUIRE(static_cast<size_t>(queue.current_index) == queue.shuffle_indices[0]);
+
+    queue.repeat_mode = sctui::core::RepeatMode::All;
+    queue.shuffle_cursor = queue.shuffle_indices.size() - 1;
+    queue.current_index = static_cast<int>(queue.shuffle_indices[queue.shuffle_cursor]);
+    const int previous_index = queue.current_index;
+    queue.advance_next();
+    REQUIRE(queue.current_index >= 0);
+    REQUIRE(queue.current_index != previous_index);
+    REQUIRE(queue.shuffle_cursor == 0);
+    std::cout << "  -> Shuffle start and Repeat All avoid skipped or immediately repeated tracks OK" << std::endl;
+}
+
+void test_config_atomic_permissions() {
+    std::cout << "[Test] Running Config atomic save and permission verification..." << std::endl;
+    const auto path = std::filesystem::temp_directory_path() / ("sctui_config_" + std::to_string(getpid()) + ".json");
+    const auto temp_path = std::filesystem::path(path.string() + ".tmp");
+    std::filesystem::remove(path);
+    std::filesystem::remove(temp_path);
+
+    sctui::core::Config config;
+    config.volume = 137;
+    config.search_limit = 73;
+    config.shuffle = true;
+    config.auth_token = "test-token";
+    REQUIRE(config.save(path).has_value());
+
+    auto require_private_file = [&]() {
+        struct stat info {};
+        REQUIRE(::stat(path.c_str(), &info) == 0);
+        REQUIRE((info.st_mode & 0777) == 0600);
+    };
+    require_private_file();
+
+    {
+        std::ofstream temp(temp_path);
+        temp << "stale";
+    }
+    REQUIRE(::chmod(temp_path.c_str(), 0644) == 0);
+    REQUIRE(::chmod(path.c_str(), 0644) == 0);
+    REQUIRE(config.save(path).has_value());
+    require_private_file();
+
+    auto loaded = sctui::core::Config::load(path);
+    REQUIRE(loaded.has_value());
+    REQUIRE(loaded->volume == 137);
+    REQUIRE(loaded->search_limit == 73);
+    REQUIRE(loaded->shuffle);
+    REQUIRE(loaded->auth_token == "test-token");
+    REQUIRE(!std::filesystem::exists(temp_path));
+    std::filesystem::remove(path);
+    std::cout << "  -> Config round trip, atomic replacement, and 0600 permissions OK" << std::endl;
 }
 
 void test_queue_alignment() {
@@ -1929,6 +2046,8 @@ int main() {
     test_bounded_channel();
     test_thread_pool();
     test_queue_alignment();
+    test_queue_edge_cases();
+    test_config_atomic_permissions();
     test_settings_topmost_selection();
     test_onboarding_wizard();
     test_entropy_shuffle();

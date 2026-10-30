@@ -7,18 +7,24 @@
 #include "sctui/audio/drm_daemon.hpp"
 #include <ftxui/component/event.hpp>
 #include <ftxui/screen/terminal.hpp>
+#include <cerrno>
+#include <csignal>
+#include <fstream>
 #include <iostream>
 #include <random>
 #include <unordered_set>
+#include <sys/wait.h>
+#include <unistd.h>
 
 namespace sctui::ui {
 
 using namespace ftxui;
 
-App::App(core::Config config)
+App::App(core::Config config, std::string initial_search_query)
     : config_(std::move(config)),
       api_(config_.client_id, config_.auth_token),
-      screen_(ScreenInteractive::Fullscreen()) {
+      screen_(ScreenInteractive::Fullscreen()),
+      initial_search_query_(std::move(initial_search_query)) {
 
     cache_manager_ = std::make_shared<core::TrackCacheManager>(config_.cache_dir);
     audio_.set_cache_manager(cache_manager_);
@@ -36,55 +42,43 @@ App::App(core::Config config)
     state_.drm_engine_enabled = config_.drm_engine_enabled;
     state_.download_drm_tracks_in_likes = config_.download_drm_tracks_in_likes;
 
+    auto post_mpris_event = [this](AsyncUIEvent event) {
+        ui_event_channel_.try_push(std::move(event));
+        screen_.PostEvent(Event::Custom);
+    };
     mpris::MprisCallbacks mpris_cb{
-        .on_play = [this]() {
-            audio_.resume();
-            screen_.PostEvent(Event::Custom);
+        .on_play = [post_mpris_event]() {
+            post_mpris_event({ .type = AsyncEventType::MprisPlay });
         },
-        .on_pause = [this]() {
-            audio_.pause();
-            screen_.PostEvent(Event::Custom);
+        .on_pause = [post_mpris_event]() {
+            post_mpris_event({ .type = AsyncEventType::MprisPause });
         },
-        .on_play_pause = [this]() {
-            ui_event_channel_.push(AsyncUIEvent{ .type = AsyncEventType::MprisPlayPause });
-            screen_.PostEvent(Event::Custom);
+        .on_play_pause = [post_mpris_event]() {
+            post_mpris_event({ .type = AsyncEventType::MprisPlayPause });
         },
-        .on_stop = [this]() {
-            ui_event_channel_.push(AsyncUIEvent{ .type = AsyncEventType::MprisStop });
-            screen_.PostEvent(Event::Custom);
+        .on_stop = [post_mpris_event]() {
+            post_mpris_event({ .type = AsyncEventType::MprisStop });
         },
-        .on_next = [this]() {
-            ui_event_channel_.push(AsyncUIEvent{ .type = AsyncEventType::MprisNext });
-            screen_.PostEvent(Event::Custom);
+        .on_next = [post_mpris_event]() {
+            post_mpris_event({ .type = AsyncEventType::MprisNext });
         },
-        .on_prev = [this]() {
-            ui_event_channel_.push(AsyncUIEvent{ .type = AsyncEventType::MprisPrevious });
-            screen_.PostEvent(Event::Custom);
+        .on_prev = [post_mpris_event]() {
+            post_mpris_event({ .type = AsyncEventType::MprisPrevious });
         },
-        .on_seek_relative = [this](int64_t offset_ms) {
-            audio_.seek_relative(offset_ms);
-            screen_.PostEvent(Event::Custom);
+        .on_seek_relative = [post_mpris_event](int64_t offset_ms) {
+            post_mpris_event({ .type = AsyncEventType::MprisSeekRelative, .signed_numeric_payload = offset_ms });
         },
-        .on_seek_absolute = [this](uint64_t target_ms) {
-            audio_.seek_absolute(target_ms);
-            screen_.PostEvent(Event::Custom);
+        .on_seek_absolute = [post_mpris_event](uint64_t target_ms) {
+            post_mpris_event({ .type = AsyncEventType::MprisSeekAbsolute, .numeric_payload = target_ms });
         },
-        .on_set_volume = [this](float vol_pct) {
-            state_.volume_percent = vol_pct;
-            audio_.set_volume(vol_pct);
-            state_.is_muted = false;
-            screen_.PostEvent(Event::Custom);
+        .on_set_volume = [post_mpris_event](float vol_pct) {
+            post_mpris_event({ .type = AsyncEventType::MprisSetVolume, .float_payload = vol_pct });
         },
-        .on_set_shuffle = [this](bool shuf) {
-            if (state_.queue.shuffle != shuf) {
-                state_.queue.toggle_shuffle();
-                state_.notify(state_.queue.shuffle ? "Shuffle ON" : "Shuffle OFF");
-                screen_.PostEvent(Event::Custom);
-            }
+        .on_set_shuffle = [post_mpris_event](bool shuf) {
+            post_mpris_event({ .type = AsyncEventType::MprisSetShuffle, .bool_payload = shuf });
         },
-        .on_set_loop_status = [this](core::RepeatMode mode) {
-            state_.queue.repeat_mode = mode;
-            screen_.PostEvent(Event::Custom);
+        .on_set_loop_status = [post_mpris_event](core::RepeatMode mode) {
+            post_mpris_event({ .type = AsyncEventType::MprisSetLoopStatus, .repeat_mode_payload = mode });
         },
         .on_quit = [this]() {
             request_exit();
@@ -107,7 +101,7 @@ core::Result<void> App::run() {
     }
     audio_.set_volume(state_.volume_percent);
     audio_.set_track_finished_callback([this](uint64_t track_id) {
-        ui_event_channel_.push(AsyncUIEvent{
+        ui_event_channel_.try_push(AsyncUIEvent{
             .type = AsyncEventType::TrackFinished,
             .numeric_payload = track_id
         });
@@ -140,8 +134,6 @@ core::Result<void> App::run() {
             if (!is_running_) return;
             auto res = api_.resolve_client_id();
             if (res && is_running_) {
-                config_.client_id = *res;
-                (void)config_.save();
                 ui_event_channel_.push(AsyncUIEvent{
                     .type = AsyncEventType::ClientIdResolved,
                     .text_payload = *res
@@ -156,7 +148,11 @@ core::Result<void> App::run() {
 
     // 5. Initial fetch of default trending / stream tracks or start onboarding
     if (config_.onboarding_completed) {
-        submit_load_view(models::ViewMode::Stream);
+        if (initial_search_query_.empty()) {
+            submit_load_view(models::ViewMode::Stream);
+        } else {
+            submit_search(initial_search_query_);
+        }
         if (config_.drm_engine_enabled) {
             check_and_download_castlabs_electron(false);
         }
@@ -185,11 +181,10 @@ core::Result<void> App::run() {
 }
 
 void App::request_exit() {
-    is_running_ = false;
-    core::CoverArtProcessor::clear_terminal_image(0);
-    config_.volume = static_cast<int>(std::round(state_.volume_percent));
-    (void)config_.save();
-    screen_.Exit();
+    if (is_running_.exchange(false)) {
+        ui_event_channel_.push(AsyncUIEvent{ .type = AsyncEventType::RequestExit });
+    }
+    screen_.PostEvent(Event::Custom);
 }
 
 void App::init_ui() {
@@ -245,6 +240,7 @@ void App::init_ui() {
         state_,
         config_,
         [this](const models::Track& track, size_t index) {
+            queue_source_is_likes_ = false;
             state_.queue.tracks = state_.user_tracks;
             state_.queue.current_index = static_cast<int>(index);
             if (state_.queue.shuffle) {
@@ -311,8 +307,6 @@ void App::init_ui() {
                 if (!is_running_) return;
                 auto res = api_.resolve_client_id();
                 if (res && is_running_) {
-                    config_.client_id = *res;
-                    (void)config_.save();
                     ui_event_channel_.push(AsyncUIEvent{
                         .type = AsyncEventType::ClientIdResolved,
                         .text_payload = *res
@@ -361,11 +355,15 @@ void App::init_ui() {
             trigger_auto_extract_cookies();
         },
         [this](std::function<void(bool ok, const std::string& err)> done_cb) {
-            thread_pool_.enqueue([this, done_cb = std::move(done_cb)]() {
+            onboarding_electron_callback_ = std::move(done_cb);
+            thread_pool_.enqueue([this]() {
                 auto sat_dir = audio::DrmSatelliteDaemon::resolve_satellite_dir();
                 std::string err;
-                bool ok = audio::DrmSatelliteDaemon::download_castlabs_electron(sat_dir, &err);
-                done_cb(ok, err);
+                const bool ok = audio::DrmSatelliteDaemon::download_castlabs_electron(sat_dir, &err);
+                ui_event_channel_.push(AsyncUIEvent{
+                    .type = ok ? AsyncEventType::ElectronDownloadFinished : AsyncEventType::ElectronDownloadFailed,
+                    .text_payload = err
+                });
                 screen_.PostEvent(Event::Custom);
             });
         }
@@ -885,66 +883,37 @@ void App::start_worker_threads() {
 
 void App::stop_worker_threads() {
     is_running_ = false;
-    thread_pool_.shutdown();
-    core::CoverArtProcessor::clear_terminal_image(0);
-    if (mpris_server_) {
-        mpris_server_->stop();
-    }
-    if (discord_rpc_) {
-        discord_rpc_->stop();
-    }
-    cancel_download_all_likes();
-    ui_event_channel_.close();
     if (telemetry_thread_.joinable()) {
         telemetry_thread_.request_stop();
         telemetry_thread_.join();
     }
+    if (mpris_server_) {
+        mpris_server_->stop();
+    }
+    ui_event_channel_.close();
+    thread_pool_.shutdown();
+    core::CoverArtProcessor::clear_terminal_image(0);
+    if (discord_rpc_) {
+        discord_rpc_->stop();
+    }
+    cancel_download_all_likes();
 }
 
 void App::update_telemetry() {
-    auto cur_audio_state = audio_.get_state();
-    if (is_track_loading_.load()) {
-        if (cur_audio_state == audio::PlaybackState::Playing ||
-            cur_audio_state == audio::PlaybackState::Buffering ||
-            cur_audio_state == audio::PlaybackState::Error) {
-            is_track_loading_.store(false);
-            state_.playback_state = cur_audio_state;
-        } else {
-            state_.playback_state = audio::PlaybackState::Loading;
-        }
-    } else {
-        state_.playback_state = cur_audio_state;
-    }
-    state_.position_ms = audio_.get_position_ms();
-    state_.duration_ms = audio_.get_duration_ms();
-    state_.buffer_percent = audio_.get_buffer_percent();
-
-    auto raw_bars = audio_.get_visualizer_bands();
-    if (state_.is_loading || state_.playback_state != audio::PlaybackState::Playing) {
-        // Smoothly decay visualizer bars to zero while next track is loading or playback is stopped
-        for (size_t i = 0; i < audio::VisualizerBandsCount; ++i) {
-            float decayed = state_.visualizer_bars[i] * 0.82f;
-            state_.visualizer_bars[i] = (decayed < 0.002f) ? 0.0f : decayed;
-        }
-    } else {
-        state_.visualizer_bars = raw_bars;
-    }
-
-    if (mpris_server_) {
-        mpris_server_->update_playback_state(state_.playback_state);
-        mpris_server_->update_position(state_.position_ms);
-        mpris_server_->update_volume(state_.volume_percent);
-        mpris_server_->update_shuffle(state_.queue.shuffle);
-        mpris_server_->update_repeat_mode(state_.queue.repeat_mode);
-    }
-
-    if (discord_rpc_) {
-        discord_rpc_->update_presence(state_.active_track, state_.playback_state, state_.position_ms, state_.duration_ms);
-    }
+    ui_event_channel_.try_push(AsyncUIEvent{
+        .type = AsyncEventType::TelemetryReady,
+        .numeric_payload = audio_.get_position_ms(),
+        .secondary_numeric_payload = audio_.get_duration_ms(),
+        .float_payload = audio_.get_buffer_percent(),
+        .playback_state_payload = audio_.get_state(),
+        .visualizer_bars_payload = audio_.get_visualizer_bands()
+    });
 }
 
 void App::submit_search(const std::string& query) {
     if (query.empty()) return;
+    const uint64_t generation = ++search_generation_;
+    const size_t search_limit = config_.search_limit;
     last_search_query_ = query;
     state_.is_loading = true;
     state_.current_view = models::ViewMode::Search;
@@ -952,15 +921,16 @@ void App::submit_search(const std::string& query) {
 
     LOG_INFO("App", "Initiating search query: '" + query + "'");
 
-    thread_pool_.enqueue([this, query]() {
+    thread_pool_.enqueue([this, query, generation, search_limit]() {
         if (!is_running_) return;
-        auto res = api_.search_tracks(query, config_.search_limit);
-        if (!is_running_) return;
+        auto res = api_.search_tracks(query, search_limit);
+        if (!is_running_ || search_generation_.load() != generation) return;
         if (res) {
             LOG_INFO("App", "Search returned " + std::to_string(res->size()) + " tracks");
             ui_event_channel_.push(AsyncUIEvent{
                 .type = AsyncEventType::SearchResultsReady,
-                .tracks_payload = std::move(*res)
+                .tracks_payload = std::move(*res),
+                .numeric_payload = generation
             });
         } else {
             LOG_ERROR("App", "Search failed: " + res.error().message);
@@ -1046,25 +1016,29 @@ void App::submit_load_view(models::ViewMode view) {
         state_.is_loading = true;
     }
 
-    thread_pool_.enqueue([this, view, has_existing_likes, top_like_id, existing_likes_set = std::move(existing_likes_set)]() mutable {
+    const size_t search_limit = config_.search_limit;
+    const std::string search_query = last_search_query_;
+    const uint64_t search_generation = ++search_generation_;
+    thread_pool_.enqueue([this, view, has_existing_likes, top_like_id, search_limit, search_query, search_generation, existing_likes_set = std::move(existing_likes_set)]() mutable {
         if (!is_running_) return;
         switch (view) {
             case models::ViewMode::Settings:
             case models::ViewMode::Account:
                 break;
             case models::ViewMode::Search:
-                if (!last_search_query_.empty()) {
-                    auto res = api_.search_tracks(last_search_query_, config_.search_limit);
+                if (!search_query.empty()) {
+                    auto res = api_.search_tracks(search_query, search_limit);
                     if (res) {
                         ui_event_channel_.push(AsyncUIEvent{
                             .type = AsyncEventType::SearchResultsReady,
-                            .tracks_payload = std::move(*res)
+                            .tracks_payload = std::move(*res),
+                            .numeric_payload = search_generation
                         });
                     }
                 }
                 break;
             case models::ViewMode::Stream: {
-                auto res = api_.get_user_stream(config_.search_limit);
+                auto res = api_.get_user_stream(search_limit);
                 if (res) {
                     ui_event_channel_.push(AsyncUIEvent{
                         .type = AsyncEventType::StreamTracksReady,
@@ -1331,6 +1305,7 @@ void App::submit_reload_current_view(bool force_from_scratch) {
 }
 
 void App::submit_load_playlist(models::Playlist playlist) {
+    const uint64_t generation = ++playlist_generation_;
     state_.selected_playlist = playlist;
     state_.playlist_tracks_selected_index = 0;
 
@@ -1348,7 +1323,7 @@ void App::submit_load_playlist(models::Playlist playlist) {
     state_.playlist_tracks.clear();
     LOG_INFO("App", "Loading tracks for playlist " + std::to_string(playlist.id) + " ('" + playlist.title + "')");
 
-    thread_pool_.enqueue([this, playlist]() {
+    thread_pool_.enqueue([this, playlist, generation]() {
         if (!is_running_) return;
         auto res = api_.get_playlist_tracks(playlist.id);
         if (!is_running_) return;
@@ -1357,7 +1332,9 @@ void App::submit_load_playlist(models::Playlist playlist) {
             LOG_INFO("App", "Loaded " + std::to_string(loaded_count) + " tracks for playlist " + playlist.title);
             ui_event_channel_.push(AsyncUIEvent{
                 .type = AsyncEventType::PlaylistTracksReady,
-                .tracks_payload = std::move(*res)
+                .tracks_payload = std::move(*res),
+                .numeric_payload = playlist.id,
+                .secondary_numeric_payload = generation
             });
             if (playlist.track_count > 0 && loaded_count < playlist.track_count) {
                 size_t missing = playlist.track_count - loaded_count;
@@ -1502,9 +1479,10 @@ void App::submit_play_track(models::Track track) {
         });
     }
 
-    thread_pool_.enqueue([this, track, current_gen]() {
+    const bool allow_drm = state_.drm_engine_enabled;
+    thread_pool_.enqueue([this, track, current_gen, allow_drm]() {
         if (!is_running_ || play_generation_.load() != current_gen) return;
-        auto res = api_.resolve_stream_url(track, state_.drm_engine_enabled);
+        auto res = api_.resolve_stream_url(track, allow_drm);
         if (!is_running_ || play_generation_.load() != current_gen) return;
         if (res) {
             audio_.play(*res, track.id, track.duration_ms, track.is_drm_protected());
@@ -1519,16 +1497,13 @@ void App::submit_play_track(models::Track track) {
                 .tracks_payload = std::move(tp),
                 .numeric_payload = current_gen
             });
-        } else {
-            if (play_generation_.load() == current_gen) {
-                is_track_loading_.store(false);
-                state_.playback_state = audio::PlaybackState::Error;
-                LOG_ERROR("App", "Stream resolution failed for track " + std::to_string(track.id) + " ('" + track.title + "'): " + res.error().message);
-                ui_event_channel_.push(AsyncUIEvent{
-                    .type = AsyncEventType::ErrorMessage,
-                    .text_payload = "Playback error: " + res.error().message
-                });
-            }
+        } else if (play_generation_.load() == current_gen) {
+            LOG_ERROR("App", "Stream resolution failed for track " + std::to_string(track.id) + " ('" + track.title + "'): " + res.error().message);
+            ui_event_channel_.push(AsyncUIEvent{
+                .type = AsyncEventType::PlayResolutionFailed,
+                .text_payload = "Playback error: " + res.error().message,
+                .numeric_payload = current_gen
+            });
         }
         screen_.PostEvent(Event::Custom);
     });
@@ -1680,59 +1655,115 @@ void App::trigger_download_all_likes() {
 
     std::vector<models::Track> to_dl = state_.likes_tracks;
 
-    likes_download_thread_ = std::jthread([this, to_dl = std::move(to_dl)](std::stop_token stop_tok) {
+    const bool download_drm = state_.drm_engine_enabled && state_.download_drm_tracks_in_likes;
+    likes_download_thread_ = std::jthread([this, to_dl = std::move(to_dl), download_drm](std::stop_token stop_tok) {
         size_t done = 0;
+        size_t downloaded = 0;
+        size_t skipped = 0;
+        size_t failed = 0;
         for (const auto& t : to_dl) {
             if (stop_tok.stop_requested() || !is_running_ || !is_downloading_likes_) {
                 break;
             }
 
-            if (cache_manager_) {
-                // Ensure complete metadata and high-res cover art are always saved
+            if (!cache_manager_) {
+                failed++;
+            } else {
                 cache_manager_->register_track(t);
+                const bool allow_drm = download_drm;
+                std::filesystem::path dest = cache_manager_->get_track_cache_path(t.id);
+                std::error_code ec;
+                const auto existing_size = std::filesystem::file_size(dest, ec);
+                if (t.is_go_plus() || (t.is_drm_protected() && !allow_drm) || (!ec && existing_size > 1024)) {
+                    skipped++;
+                } else {
+                    auto stream_res = api_.resolve_stream_url(t, allow_drm);
+                    if (stop_tok.stop_requested() || !is_running_ || !is_downloading_likes_) {
+                        break;
+                    }
+                    if (!stream_res || stream_res->empty()) {
+                        failed++;
+                    } else {
+                        const std::filesystem::path tmp_path = dest.string() + ".part." + std::to_string(getpid());
+                        std::filesystem::remove(tmp_path, ec);
+                        const bool is_hls = (stream_res->find(".m3u8") != std::string::npos ||
+                                             stream_res->find("/hls") != std::string::npos ||
+                                             stream_res->find("/aac_") != std::string::npos ||
+                                             stream_res->find("media-streaming.soundcloud.cloud") != std::string::npos);
 
-                // Skip Go+ tracks
-                if (!t.is_go_plus()) {
-                    bool allow_drm = state_.drm_engine_enabled && state_.download_drm_tracks_in_likes;
-                    if (!t.is_drm_protected() || allow_drm) {
-                        std::filesystem::path dest = cache_manager_->get_track_cache_path(t.id);
-                        std::error_code ec;
-                        if (!std::filesystem::exists(dest, ec) || std::filesystem::file_size(dest, ec) <= 1024) {
-                            auto stream_res = api_.resolve_stream_url(t, allow_drm);
-                            if (stream_res && !stream_res->empty() && is_running_ && is_downloading_likes_) {
-                                std::filesystem::path tmp_path = dest.string() + ".download.tmp";
-                                bool is_hls = (stream_res->find(".m3u8") != std::string::npos ||
-                                               stream_res->find("/hls") != std::string::npos ||
-                                               stream_res->find("/aac_") != std::string::npos ||
-                                               stream_res->find("media-streaming.soundcloud.cloud") != std::string::npos);
-
-                                bool download_ok = false;
-                                if (is_hls) {
-                                    std::string cmd = "ffmpeg -y -hide_banner -loglevel error -i \"" + *stream_res +
-                                                      "\" -c:a libmp3lame -b:a 192k \"" + tmp_path.string() + "\" >/dev/null 2>&1";
-                                    int rc = std::system(cmd.c_str());
-                                    download_ok = (rc == 0);
-                                } else {
-                                    std::ofstream out_file(tmp_path, std::ios::binary);
-                                    if (out_file.is_open()) {
-                                        net::HttpClient dl_client;
-                                        auto dl_res = dl_client.get_stream(*stream_res, [&out_file](const char* data, size_t size) {
-                                            out_file.write(data, size);
-                                            return true;
-                                        });
-                                        out_file.close();
-                                        download_ok = (dl_res && dl_res->is_2xx());
+                        bool download_ok = false;
+                        if (is_hls) {
+                            const std::string tmp_string = tmp_path.string();
+                            std::vector<const char*> args = {
+                                "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+                                "-i", stream_res->c_str(), "-c:a", "libmp3lame", "-b:a", "192k",
+                                "-f", "mp3", tmp_string.c_str(), nullptr
+                            };
+                            pid_t pid = fork();
+                            if (pid == 0) {
+                                execvp("ffmpeg", const_cast<char* const*>(args.data()));
+                                _exit(127);
+                            }
+                            if (pid > 0) {
+                                int status = 0;
+                                while (true) {
+                                    const pid_t wait_result = waitpid(pid, &status, WNOHANG);
+                                    if (wait_result == pid) {
+                                        download_ok = WIFEXITED(status) && WEXITSTATUS(status) == 0;
+                                        break;
                                     }
-                                }
-
-                                if (download_ok && std::filesystem::exists(tmp_path) && std::filesystem::file_size(tmp_path) > 1024) {
-                                    std::filesystem::rename(tmp_path, dest, ec);
-                                    cache_manager_->register_track(t);
-                                } else {
-                                    std::filesystem::remove(tmp_path, ec);
+                                    if (wait_result < 0 && errno != EINTR) {
+                                        break;
+                                    }
+                                    if (stop_tok.stop_requested() || !is_running_ || !is_downloading_likes_) {
+                                        kill(pid, SIGTERM);
+                                        while (waitpid(pid, &status, 0) < 0 && errno == EINTR) {}
+                                        break;
+                                    }
+                                    std::this_thread::sleep_for(std::chrono::milliseconds(50));
                                 }
                             }
+                        } else {
+                            std::ofstream out_file(tmp_path, std::ios::binary | std::ios::trunc);
+                            if (out_file.is_open()) {
+                                net::HttpClient dl_client;
+                                bool write_failed = false;
+                                auto dl_res = dl_client.get_stream(*stream_res, [&](const char* data, size_t size) {
+                                    if (stop_tok.stop_requested() || !is_running_ || !is_downloading_likes_) {
+                                        return false;
+                                    }
+                                    out_file.write(data, static_cast<std::streamsize>(size));
+                                    if (!out_file) {
+                                        write_failed = true;
+                                        return false;
+                                    }
+                                    return true;
+                                });
+                                out_file.close();
+                                download_ok = dl_res && dl_res->is_2xx() && !write_failed && out_file.good();
+                            }
                         }
+
+                        if (stop_tok.stop_requested() || !is_running_ || !is_downloading_likes_) {
+                            std::filesystem::remove(tmp_path, ec);
+                            break;
+                        }
+
+                        ec.clear();
+                        const auto size = std::filesystem::file_size(tmp_path, ec);
+                        if (download_ok && !ec && size > 1024) {
+                            ec.clear();
+                            std::filesystem::rename(tmp_path, dest, ec);
+                            if (!ec) {
+                                cache_manager_->register_track(t);
+                                downloaded++;
+                            } else {
+                                failed++;
+                            }
+                        } else {
+                            failed++;
+                        }
+                        std::filesystem::remove(tmp_path, ec);
                     }
                 }
             }
@@ -1748,7 +1779,9 @@ void App::trigger_download_all_likes() {
         is_downloading_likes_ = false;
         ui_event_channel_.push(AsyncUIEvent{
             .type = AsyncEventType::LikesDownloadFinished,
-            .numeric_payload = done
+            .numeric_payload = downloaded,
+            .secondary_numeric_payload = skipped,
+            .tertiary_numeric_payload = failed
         });
         screen_.PostEvent(Event::Custom);
     });
@@ -1758,6 +1791,7 @@ void App::play_next_track() {
     if (state_.queue.tracks.empty()) {
         const auto& current_list = track_list_view_->get_current_track_list();
         if (!current_list.empty()) {
+            queue_source_is_likes_ = (state_.current_view == models::ViewMode::Likes);
             state_.queue.tracks = current_list;
             state_.queue.current_index = 0;
             if (state_.queue.shuffle) {
@@ -1816,6 +1850,7 @@ void App::play_previous_track() {
     if (state_.queue.tracks.empty() && !state_.active_track) {
         const auto& current_list = track_list_view_->get_current_track_list();
         if (!current_list.empty()) {
+            queue_source_is_likes_ = (state_.current_view == models::ViewMode::Likes);
             state_.queue.tracks = current_list;
             state_.queue.current_index = 0;
             if (state_.queue.shuffle) {
@@ -1882,44 +1917,32 @@ void App::play_previous_track() {
 void App::process_async_events() {
     while (auto opt_event = ui_event_channel_.try_pop()) {
         auto& evt = *opt_event;
-        state_.is_loading = false;
 
         switch (evt.type) {
             case AsyncEventType::SearchResultsReady:
-                state_.search_results = std::move(evt.tracks_payload);
-                state_.search_selected_index = 0;
+                if (search_generation_.load() == evt.numeric_payload) {
+                    state_.is_loading = false;
+                    state_.search_results = std::move(evt.tracks_payload);
+                    state_.search_selected_index = 0;
+                }
                 break;
             case AsyncEventType::StreamTracksReady:
+                state_.is_loading = false;
                 state_.stream_tracks = std::move(evt.tracks_payload);
                 state_.stream_selected_index = 0;
                 break;
             case AsyncEventType::LikesTracksReady:
                 state_.likes_tracks = std::move(evt.tracks_payload);
                 state_.likes_selected_index = 0;
-                state_.liked_track_ids.clear();
                 for (const auto& t : state_.likes_tracks) {
                     state_.liked_track_ids.insert(t.id);
-                }
-                if (cache_manager_) {
-                    std::vector<uint64_t> liked_ids;
-                    liked_ids.reserve(state_.likes_tracks.size());
-                    for (const auto& t : state_.likes_tracks) {
-                        liked_ids.push_back(t.id);
-                    }
-                    cache_manager_->sync_liked_tracks(liked_ids);
+                    if (cache_manager_) cache_manager_->update_track_liked(t.id, true);
                 }
                 break;
             case AsyncEventType::LikesTracksAppended:
                 for (const auto& t : evt.tracks_payload) {
                     state_.liked_track_ids.insert(t.id);
-                }
-                if (cache_manager_) {
-                    std::vector<uint64_t> liked_ids;
-                    liked_ids.reserve(evt.tracks_payload.size());
-                    for (const auto& t : evt.tracks_payload) {
-                        liked_ids.push_back(t.id);
-                    }
-                    cache_manager_->sync_liked_tracks(liked_ids);
+                    if (cache_manager_) cache_manager_->update_track_liked(t.id, true);
                 }
                 if (queue_source_is_likes_) {
                     state_.queue.append_tracks_and_update_shuffle(evt.tracks_payload);
@@ -1930,17 +1953,11 @@ void App::process_async_events() {
                     std::make_move_iterator(evt.tracks_payload.end())
                 );
                 break;
-            case AsyncEventType::LikesTracksDiffPrepended:
+            case AsyncEventType::LikesTracksDiffPrepended: {
+                const size_t prepended_count = evt.tracks_payload.size();
                 for (const auto& t : evt.tracks_payload) {
                     state_.liked_track_ids.insert(t.id);
-                }
-                if (cache_manager_) {
-                    std::vector<uint64_t> liked_ids;
-                    liked_ids.reserve(evt.tracks_payload.size());
-                    for (const auto& t : evt.tracks_payload) {
-                        liked_ids.push_back(t.id);
-                    }
-                    cache_manager_->sync_liked_tracks(liked_ids);
+                    if (cache_manager_) cache_manager_->update_track_liked(t.id, true);
                 }
                 if (queue_source_is_likes_) {
                     state_.queue.append_tracks_and_update_shuffle(evt.tracks_payload);
@@ -1950,10 +1967,17 @@ void App::process_async_events() {
                     std::make_move_iterator(evt.tracks_payload.begin()),
                     std::make_move_iterator(evt.tracks_payload.end())
                 );
-                state_.notify("Likes updated: +" + std::to_string(evt.tracks_payload.size()) + " new track(s)", false, 3);
+                state_.notify("Likes updated: +" + std::to_string(prepended_count) + " new track(s)", false, 3);
                 break;
+            }
             case AsyncEventType::LikesFullyLoaded:
                 state_.is_loading = false;
+                if (cache_manager_) {
+                    std::vector<uint64_t> liked_ids;
+                    liked_ids.reserve(state_.likes_tracks.size());
+                    for (const auto& t : state_.likes_tracks) liked_ids.push_back(t.id);
+                    cache_manager_->sync_liked_tracks(liked_ids);
+                }
                 if (queue_source_is_likes_) {
                     std::string msg = "Likes library completely loaded: " + std::to_string(state_.queue.tracks.size()) + " tracks queued";
                     if (state_.queue.shuffle) {
@@ -1967,18 +1991,23 @@ void App::process_async_events() {
                 break;
             case AsyncEventType::LikesDownloadFinished:
                 state_.is_downloading_likes = false;
-                state_.notify("All likes downloaded to cache (" + std::to_string(evt.numeric_payload) + " tracks)!", false, 5);
+                state_.notify("Likes download finished: " + std::to_string(evt.numeric_payload) + " downloaded, " +
+                              std::to_string(evt.secondary_numeric_payload) + " skipped, " +
+                              std::to_string(evt.tertiary_numeric_payload) + " failed.", evt.tertiary_numeric_payload > 0, 5);
                 break;
             case AsyncEventType::PlaylistsReady:
+                state_.is_loading = false;
                 state_.playlists = std::move(evt.playlists_payload);
                 state_.playlist_selected_index = 0;
                 break;
             case AsyncEventType::PlaylistTracksReady:
-                if (state_.selected_playlist.has_value()) {
-                    playlist_session_cache_[state_.selected_playlist->id] = evt.tracks_payload;
+                if (playlist_generation_.load() != evt.secondary_numeric_payload) break;
+                playlist_session_cache_[evt.numeric_payload] = evt.tracks_payload;
+                if (state_.selected_playlist && state_.selected_playlist->id == evt.numeric_payload) {
+                    state_.is_loading = false;
+                    state_.playlist_tracks = std::move(evt.tracks_payload);
+                    state_.playlist_tracks_selected_index = 0;
                 }
-                state_.playlist_tracks = std::move(evt.tracks_payload);
-                state_.playlist_tracks_selected_index = 0;
                 break;
             case AsyncEventType::StreamResolvedAndPlay:
                 if (play_generation_.load() == evt.numeric_payload) {
@@ -1994,6 +2023,14 @@ void App::process_async_events() {
                         discord_rpc_->update_presence(state_.active_track, audio::PlaybackState::Playing, 0, state_.active_track->duration_ms);
                     }
                     state_.notify("Now playing: " + core::truncate_string(state_.active_track ? state_.active_track->title : "", 30));
+                }
+                break;
+            case AsyncEventType::PlayResolutionFailed:
+                if (play_generation_.load() == evt.numeric_payload) {
+                    is_track_loading_.store(false);
+                    state_.is_loading = false;
+                    state_.playback_state = audio::PlaybackState::Error;
+                    state_.notify(evt.text_payload, true, 6);
                 }
                 break;
             case AsyncEventType::TrackFinished:
@@ -2018,7 +2055,52 @@ void App::process_async_events() {
                 state_.notify(evt.text_payload, false, 3);
                 break;
             case AsyncEventType::ClientIdResolved:
+                config_.client_id = evt.text_payload;
+                (void)config_.save();
                 state_.notify("SoundCloud Client ID updated: " + evt.text_payload.substr(0, 8) + "...", false, 3);
+                break;
+            case AsyncEventType::TelemetryReady: {
+                auto audio_state = evt.playback_state_payload;
+                if (is_track_loading_.load()) {
+                    if (audio_state == audio::PlaybackState::Playing ||
+                        audio_state == audio::PlaybackState::Buffering ||
+                        audio_state == audio::PlaybackState::Error) {
+                        is_track_loading_.store(false);
+                        state_.playback_state = audio_state;
+                    } else {
+                        state_.playback_state = audio::PlaybackState::Loading;
+                    }
+                } else {
+                    state_.playback_state = audio_state;
+                }
+                state_.position_ms = evt.numeric_payload;
+                state_.duration_ms = evt.secondary_numeric_payload;
+                state_.buffer_percent = evt.float_payload;
+                if (state_.is_loading || state_.playback_state != audio::PlaybackState::Playing) {
+                    for (float& bar : state_.visualizer_bars) {
+                        float decayed = bar * 0.82f;
+                        bar = decayed < 0.002f ? 0.0f : decayed;
+                    }
+                } else {
+                    state_.visualizer_bars = evt.visualizer_bars_payload;
+                }
+                if (mpris_server_) {
+                    mpris_server_->update_playback_state(state_.playback_state);
+                    mpris_server_->update_position(state_.position_ms);
+                    mpris_server_->update_volume(state_.volume_percent);
+                    mpris_server_->update_shuffle(state_.queue.shuffle);
+                    mpris_server_->update_repeat_mode(state_.queue.repeat_mode);
+                }
+                if (discord_rpc_) {
+                    discord_rpc_->update_presence(state_.active_track, state_.playback_state, state_.position_ms, state_.duration_ms);
+                }
+                break;
+            }
+            case AsyncEventType::MprisPlay:
+                audio_.resume();
+                break;
+            case AsyncEventType::MprisPause:
+                audio_.pause();
                 break;
             case AsyncEventType::MprisNext:
                 play_next_track();
@@ -2030,8 +2112,34 @@ void App::process_async_events() {
                 audio_.toggle_playback();
                 break;
             case AsyncEventType::MprisStop:
+                ++play_generation_;
                 audio_.stop();
                 is_track_loading_.store(false);
+                state_.playback_state = audio::PlaybackState::Stopped;
+                state_.position_ms = 0;
+                break;
+            case AsyncEventType::MprisSeekRelative:
+                audio_.seek_relative(evt.signed_numeric_payload);
+                break;
+            case AsyncEventType::MprisSeekAbsolute:
+                audio_.seek_absolute(evt.numeric_payload);
+                break;
+            case AsyncEventType::MprisSetVolume:
+                state_.volume_percent = std::clamp(evt.float_payload, 0.0f, 150.0f);
+                state_.is_muted = false;
+                audio_.set_volume(state_.volume_percent);
+                break;
+            case AsyncEventType::MprisSetShuffle:
+                if (state_.queue.shuffle != evt.bool_payload) {
+                    state_.queue.toggle_shuffle();
+                    state_.notify(state_.queue.shuffle ? "Shuffle ON" : "Shuffle OFF");
+                }
+                break;
+            case AsyncEventType::MprisSetLoopStatus:
+                state_.queue.repeat_mode = evt.repeat_mode_payload;
+                break;
+            case AsyncEventType::RequestExit:
+                screen_.Exit();
                 break;
             case AsyncEventType::UserProfileReady:
                 state_.user_profile = std::move(evt.profile_payload);
@@ -2045,10 +2153,20 @@ void App::process_async_events() {
                 break;
             case AsyncEventType::ElectronDownloadFinished:
                 state_.is_downloading_electron = false;
+                if (onboarding_electron_callback_) {
+                    auto callback = std::move(onboarding_electron_callback_);
+                    onboarding_electron_callback_ = {};
+                    callback(true, "");
+                }
                 state_.notify("[DRM Engine] Castlabs Electron installed successfully!", false, 5);
                 break;
             case AsyncEventType::ElectronDownloadFailed:
                 state_.is_downloading_electron = false;
+                if (onboarding_electron_callback_) {
+                    auto callback = std::move(onboarding_electron_callback_);
+                    onboarding_electron_callback_ = {};
+                    callback(false, evt.text_payload);
+                }
                 state_.notify("[DRM Engine] " + (evt.text_payload.empty() ? "Failed to download Castlabs Electron" : evt.text_payload), true, 6);
                 break;
         }

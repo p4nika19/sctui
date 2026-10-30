@@ -3,6 +3,7 @@
 #include <fstream>
 #include <filesystem>
 #include <algorithm>
+#include <unistd.h>
 #include "sctui/core/cookie_extractor.hpp"
 #include "sctui/ui/theme_symbols.hpp"
 #include "sctui/audio/drm_daemon.hpp"
@@ -457,15 +458,23 @@ OnboardingView::~OnboardingView() {
 }
 
 void OnboardingView::load_static_fixture() {
-    static const std::string candidate_paths[] = {
+    std::vector<std::filesystem::path> candidate_paths = {
         "assets/preview_cover.jpg",
         "../assets/preview_cover.jpg",
-        "/home/p4nika/projects/cpp/sctui/assets/preview_cover.jpg"
+        "/usr/local/share/sctui/assets/preview_cover.jpg",
+        "/usr/share/sctui/assets/preview_cover.jpg"
     };
+    std::error_code ec;
+    const auto executable_path = std::filesystem::read_symlink("/proc/self/exe", ec);
+    if (!ec) {
+        const auto executable_dir = executable_path.parent_path();
+        candidate_paths.push_back(executable_dir / "../share/sctui/assets/preview_cover.jpg");
+        candidate_paths.push_back(executable_dir / "../../../../assets/preview_cover.jpg");
+    }
 
     std::vector<uint8_t> raw_bytes;
     for (const auto& path : candidate_paths) {
-        raw_bytes = read_binary_file(path);
+        raw_bytes = read_binary_file(path.string());
         if (!raw_bytes.empty()) {
             break;
         }

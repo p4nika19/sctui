@@ -14,6 +14,7 @@
 #include "miniaudio.h"
 #pragma clang diagnostic pop
 
+#include <cerrno>
 #include <cmath>
 #include <cstring>
 #include <fstream>
@@ -50,6 +51,7 @@ struct AudioEngine::Impl {
     std::array<std::atomic<float>, VisualizerBandsCount> visualizer_bands{};
 
     core::SPSCQueue<AudioCommand, 64> command_queue;
+    std::mutex command_queue_mutex;
     TrackFinishedCallback finished_callback;
 
     std::mutex file_mutex;
@@ -59,6 +61,7 @@ struct AudioEngine::Impl {
     std::atomic<bool> download_finished{false};
     std::atomic<bool> cancel_download{false};
     std::atomic<pid_t> active_ffmpeg_pid{-1};
+    std::mutex ffmpeg_pid_mutex;
     std::shared_ptr<core::TrackCacheManager> cache_manager;
 
     std::jthread download_worker;
@@ -78,12 +81,32 @@ struct AudioEngine::Impl {
         shutdown_engine();
     }
 
+    void enqueue_command(AudioCommand command) {
+        std::lock_guard<std::mutex> lock(command_queue_mutex);
+        while (!command_queue.push(command) && !stop_workers.load(std::memory_order_relaxed)) {
+            std::this_thread::yield();
+        }
+    }
+
+    bool initialize_decoder_file(const std::string& path) {
+        std::lock_guard<std::mutex> lock(decoder_mutex);
+        ma_decoder_config decoder_cfg = ma_decoder_config_init(ma_format_f32, 2, 48000);
+        if (ma_decoder_init_file(path.c_str(), &decoder_cfg, &decoder) != MA_SUCCESS) {
+            return false;
+        }
+        decoder_initialized = true;
+        ma_uint64 length_frames = 0;
+        if (ma_decoder_get_length_in_pcm_frames(&decoder, &length_frames) == MA_SUCCESS && length_frames > 0) {
+            duration_ms.store((length_frames * 1000) / 48000, std::memory_order_relaxed);
+        }
+        return true;
+    }
+
     void stop_active_ffmpeg() {
+        std::lock_guard<std::mutex> lock(ffmpeg_pid_mutex);
         pid_t pid = active_ffmpeg_pid.exchange(-1);
         if (pid > 0) {
             kill(pid, SIGTERM);
-            int status = 0;
-            waitpid(pid, &status, WNOHANG);
         }
     }
 
@@ -165,6 +188,7 @@ struct AudioEngine::Impl {
         }
 
         float* out_buffer = static_cast<float*>(pOutput);
+        uint64_t finished_track_id = 0;
         ma_uint64 frames_read = 0;
 
         ma_result result = ma_decoder_read_pcm_frames(&self->decoder, out_buffer, frameCount, &frames_read);
@@ -201,9 +225,7 @@ struct AudioEngine::Impl {
             } else {
                 // Natural end of track reached!
                 self->state.store(PlaybackState::Finished, std::memory_order_relaxed);
-                if (self->finished_callback) {
-                    self->finished_callback(self->current_track_id.load(std::memory_order_relaxed));
-                }
+                finished_track_id = self->current_track_id.load(std::memory_order_relaxed);
             }
             // Zero out remaining frames
             std::memset(out_buffer + frames_read * 2, 0, (frameCount - frames_read) * sizeof(float) * 2);
@@ -277,6 +299,11 @@ struct AudioEngine::Impl {
         if (ma_decoder_get_cursor_in_pcm_frames(&self->decoder, &cursor_frames) == MA_SUCCESS) {
             uint64_t ms = (cursor_frames * 1000) / pDevice->sampleRate;
             self->position_ms.store(ms, std::memory_order_relaxed);
+        }
+
+        lock.unlock();
+        if (finished_track_id != 0 && self->finished_callback) {
+            self->finished_callback(finished_track_id);
         }
     }
 
@@ -396,19 +423,13 @@ struct AudioEngine::Impl {
 
         std::string stream_url = cmd.stream_url;
 
-        // Check if URL is local file
+        std::error_code file_ec;
         if (stream_url.find("http://") != 0 && stream_url.find("https://") != 0) {
             current_file_path = stream_url;
             download_finished = true;
             buffer_percent.store(100.0f, std::memory_order_relaxed);
 
-            ma_decoder_config decoder_cfg = ma_decoder_config_init(ma_format_f32, 2, 48000);
-            if (ma_decoder_init_file(current_file_path.c_str(), &decoder_cfg, &decoder) == MA_SUCCESS) {
-                decoder_initialized = true;
-                ma_uint64 length_frames = 0;
-                if (ma_decoder_get_length_in_pcm_frames(&decoder, &length_frames) == MA_SUCCESS && length_frames > 0) {
-                    duration_ms.store((length_frames * 1000) / 48000, std::memory_order_relaxed);
-                }
+            if (initialize_decoder_file(current_file_path)) {
                 state.store(PlaybackState::Playing, std::memory_order_relaxed);
                 LOG_INFO("AudioEngine", "Local file playing: " + current_file_path);
             } else {
@@ -418,58 +439,42 @@ struct AudioEngine::Impl {
             return;
         }
 
-        // Cache path determination
         if (cache_manager) {
             current_file_path = cache_manager->get_track_cache_path(cmd.track_id).string();
             auto cached_opt = cache_manager->get_cached_track(cmd.track_id);
-            if (cached_opt.has_value() && std::filesystem::exists(*cached_opt)) {
-                auto sz = std::filesystem::file_size(*cached_opt);
-                if (sz > 1024) {
+            if (cached_opt && std::filesystem::exists(*cached_opt, file_ec)) {
+                auto sz = std::filesystem::file_size(*cached_opt, file_ec);
+                if (!file_ec && sz > 1024) {
                     LOG_INFO("AudioEngine", "Track " + std::to_string(cmd.track_id) + " playing from cache (" +
                              std::to_string(sz) + " bytes). Playing immediately.");
                     download_finished = true;
                     buffer_percent.store(100.0f, std::memory_order_relaxed);
 
-                    ma_decoder_config decoder_cfg = ma_decoder_config_init(ma_format_f32, 2, 48000);
-                    if (ma_decoder_init_file(cached_opt->c_str(), &decoder_cfg, &decoder) == MA_SUCCESS) {
-                        decoder_initialized = true;
-                        ma_uint64 length_frames = 0;
-                        if (ma_decoder_get_length_in_pcm_frames(&decoder, &length_frames) == MA_SUCCESS && length_frames > 0) {
-                            duration_ms.store((length_frames * 1000) / 48000, std::memory_order_relaxed);
-                        }
+                    if (initialize_decoder_file(*cached_opt)) {
                         state.store(PlaybackState::Playing, std::memory_order_relaxed);
                         return;
-                    } else {
-                        LOG_WARN("AudioEngine", "Corrupt cached file detected, will re-download: " + current_file_path);
-                        std::filesystem::remove(*cached_opt);
                     }
+                    LOG_WARN("AudioEngine", "Corrupt cached file detected, will re-download: " + current_file_path);
+                    std::filesystem::remove(*cached_opt, file_ec);
                 }
             }
         } else {
             auto temp_dir = std::filesystem::temp_directory_path() / "sctui";
-            std::filesystem::create_directories(temp_dir);
+            std::filesystem::create_directories(temp_dir, file_ec);
             current_file_path = (temp_dir / ("track_" + std::to_string(cmd.track_id) + ".mp3")).string();
 
-            // Check if full track already exists in disk cache
-            if (std::filesystem::exists(current_file_path) && std::filesystem::file_size(current_file_path) > 100000) {
-                LOG_INFO("AudioEngine", "Track " + std::to_string(cmd.track_id) + " found in local cache (" +
-                         std::to_string(std::filesystem::file_size(current_file_path)) + " bytes). Playing immediately.");
+            if (std::filesystem::exists(current_file_path, file_ec) &&
+                std::filesystem::file_size(current_file_path, file_ec) > 100000) {
+                LOG_INFO("AudioEngine", "Track " + std::to_string(cmd.track_id) + " found in local cache. Playing immediately.");
                 download_finished = true;
                 buffer_percent.store(100.0f, std::memory_order_relaxed);
 
-                ma_decoder_config decoder_cfg = ma_decoder_config_init(ma_format_f32, 2, 48000);
-                if (ma_decoder_init_file(current_file_path.c_str(), &decoder_cfg, &decoder) == MA_SUCCESS) {
-                    decoder_initialized = true;
-                    ma_uint64 length_frames = 0;
-                    if (ma_decoder_get_length_in_pcm_frames(&decoder, &length_frames) == MA_SUCCESS && length_frames > 0) {
-                        duration_ms.store((length_frames * 1000) / 48000, std::memory_order_relaxed);
-                    }
+                if (initialize_decoder_file(current_file_path)) {
                     state.store(PlaybackState::Playing, std::memory_order_relaxed);
                     return;
-                } else {
-                    LOG_WARN("AudioEngine", "Corrupt cached file detected, will re-download: " + current_file_path);
-                    std::filesystem::remove(current_file_path);
                 }
+                LOG_WARN("AudioEngine", "Corrupt cached file detected, will re-download: " + current_file_path);
+                std::filesystem::remove(current_file_path, file_ec);
             }
         }
 
@@ -479,9 +484,14 @@ struct AudioEngine::Impl {
                        stream_url.find("/aac_") != std::string::npos ||
                        stream_url.find("media-streaming.soundcloud.cloud") != std::string::npos);
 
+        const std::string final_path = current_file_path;
+        const std::string temp_path = final_path + ".part." + std::to_string(getpid());
+
         if (is_hls) {
-            download_worker = std::jthread([this, stream_url, track_id = cmd.track_id](std::stop_token stop_tok) {
+            download_worker = std::jthread([this, stream_url, final_path, temp_path, track_id = cmd.track_id](std::stop_token stop_tok) {
                 LOG_INFO("AudioEngine", "Streaming HLS track " + std::to_string(track_id) + " via ffmpeg transcoder...");
+                std::error_code ec;
+                std::filesystem::remove(temp_path, ec);
 
                 pid_t pid = fork();
                 if (pid == 0) {
@@ -500,7 +510,8 @@ struct AudioEngine::Impl {
                         "-i", stream_url.c_str(),
                         "-c:a", "libmp3lame",
                         "-b:a", "192k",
-                        current_file_path.c_str(),
+                        "-f", "mp3",
+                        temp_path.c_str(),
                         nullptr
                     };
                     execvp("ffmpeg", const_cast<char* const*>(args.data()));
@@ -513,90 +524,121 @@ struct AudioEngine::Impl {
                     return;
                 }
 
-                active_ffmpeg_pid.store(pid);
+                {
+                    std::lock_guard<std::mutex> lock(ffmpeg_pid_mutex);
+                    active_ffmpeg_pid.store(pid, std::memory_order_relaxed);
+                }
 
+                int status = 0;
+                bool child_reaped = false;
                 while (!stop_tok.stop_requested() && !cancel_download.load(std::memory_order_relaxed)) {
-                    int status = 0;
-                    pid_t res = waitpid(pid, &status, WNOHANG);
-                    if (res == pid) {
-                        active_ffmpeg_pid.store(-1);
-                        if (WIFEXITED(status) && WEXITSTATUS(status) == 0) {
-                            LOG_INFO("AudioEngine", "ffmpeg finished transcoding track " + std::to_string(track_id));
-                            download_finished.store(true, std::memory_order_relaxed);
-                            buffer_percent.store(100.0f, std::memory_order_relaxed);
-                            if (cache_manager) {
-                                cache_manager->register_track(track_id);
-                            }
-                        } else {
-                            LOG_ERROR("AudioEngine", "ffmpeg exited with status code " + std::to_string(WEXITSTATUS(status)));
+                    {
+                        std::lock_guard<std::mutex> lock(ffmpeg_pid_mutex);
+                        pid_t result = waitpid(pid, &status, WNOHANG);
+                        if (result == pid) {
+                            active_ffmpeg_pid.store(-1, std::memory_order_relaxed);
+                            child_reaped = true;
+                        } else if (result < 0 && errno != EINTR) {
+                            active_ffmpeg_pid.store(-1, std::memory_order_relaxed);
+                            LOG_ERROR("AudioEngine", "Failed to wait for ffmpeg transcoder");
                             state.store(PlaybackState::Error, std::memory_order_relaxed);
+                            std::filesystem::remove(temp_path, ec);
+                            return;
                         }
-                        break;
                     }
+                    if (child_reaped) break;
 
-                    if (std::filesystem::exists(current_file_path)) {
-                        auto sz = std::filesystem::file_size(current_file_path);
-                        bytes_downloaded.store(sz, std::memory_order_relaxed);
+                    const auto size = std::filesystem::file_size(temp_path, ec);
+                    if (!ec) {
+                        bytes_downloaded.store(size, std::memory_order_relaxed);
                     }
-
                     std::this_thread::sleep_for(std::chrono::milliseconds(50));
                 }
 
-                if (cancel_download.load(std::memory_order_relaxed)) {
+                if (!child_reaped) {
                     stop_active_ffmpeg();
+                    do {
+                        status = 0;
+                    } while (waitpid(pid, &status, 0) < 0 && errno == EINTR);
+                    std::lock_guard<std::mutex> lock(ffmpeg_pid_mutex);
+                    if (active_ffmpeg_pid.load(std::memory_order_relaxed) == pid) {
+                        active_ffmpeg_pid.store(-1, std::memory_order_relaxed);
+                    }
+                    std::filesystem::remove(temp_path, ec);
                     return;
                 }
 
-                // Initialize decoder on the complete, fully-transcoded file
-                if (download_finished.load(std::memory_order_relaxed) && std::filesystem::exists(current_file_path) && std::filesystem::file_size(current_file_path) > 1024) {
-                    ma_decoder_config decoder_cfg = ma_decoder_config_init(ma_format_f32, 2, 48000);
-                    if (ma_decoder_init_file(current_file_path.c_str(), &decoder_cfg, &decoder) == MA_SUCCESS) {
-                        decoder_initialized = true;
-                        ma_uint64 length_frames = 0;
-                        if (ma_decoder_get_length_in_pcm_frames(&decoder, &length_frames) == MA_SUCCESS && length_frames > 0) {
-                            duration_ms.store((length_frames * 1000) / 48000, std::memory_order_relaxed);
-                        }
-                        state.store(PlaybackState::Playing, std::memory_order_relaxed);
-                        LOG_INFO("AudioEngine", "Playback started for full track " + std::to_string(track_id) + " (" + std::to_string(duration_ms.load()) + " ms, " + std::to_string(std::filesystem::file_size(current_file_path)) + " bytes)");
-                    } else {
-                        LOG_ERROR("AudioEngine", "ma_decoder_init_file failed on " + current_file_path);
-                        state.store(PlaybackState::Error, std::memory_order_relaxed);
-                    }
+                const bool cancelled = stop_tok.stop_requested() || cancel_download.load(std::memory_order_relaxed);
+                const auto size = std::filesystem::file_size(temp_path, ec);
+                if (cancelled) {
+                    std::filesystem::remove(temp_path, ec);
+                    return;
                 }
+                if (!WIFEXITED(status) || WEXITSTATUS(status) != 0 || ec || size <= 1024) {
+                    LOG_ERROR("AudioEngine", "ffmpeg failed to produce a complete audio file");
+                    state.store(PlaybackState::Error, std::memory_order_relaxed);
+                    std::filesystem::remove(temp_path, ec);
+                    return;
+                }
+
+                std::filesystem::rename(temp_path, final_path, ec);
+                if (ec) {
+                    LOG_ERROR("AudioEngine", "Failed to publish transcoded audio file: " + ec.message());
+                    state.store(PlaybackState::Error, std::memory_order_relaxed);
+                    std::filesystem::remove(temp_path, ec);
+                    return;
+                }
+
+                if (!initialize_decoder_file(final_path)) {
+                    LOG_ERROR("AudioEngine", "ma_decoder_init_file failed on " + final_path);
+                    state.store(PlaybackState::Error, std::memory_order_relaxed);
+                    std::filesystem::remove(final_path, ec);
+                    return;
+                }
+
+                download_finished.store(true, std::memory_order_relaxed);
+                buffer_percent.store(100.0f, std::memory_order_relaxed);
+                if (cache_manager) {
+                    cache_manager->register_track(track_id);
+                }
+                state.store(PlaybackState::Playing, std::memory_order_relaxed);
+                LOG_INFO("AudioEngine", "Playback started for full track " + std::to_string(track_id));
             });
         } else {
-            // Direct progressive MP3 download
-            download_worker = std::jthread([this, stream_url, track_id = cmd.track_id](std::stop_token stop_tok) {
-                std::ofstream out_file(current_file_path, std::ios::binary | std::ios::trunc);
+            download_worker = std::jthread([this, stream_url, final_path, temp_path, track_id = cmd.track_id](std::stop_token stop_tok) {
+                std::ofstream out_file(temp_path, std::ios::binary | std::ios::trunc);
                 if (!out_file.is_open()) {
-                    LOG_ERROR("AudioEngine", "Failed to create temp audio file: " + current_file_path);
+                    LOG_ERROR("AudioEngine", "Failed to create temp audio file: " + temp_path);
                     state.store(PlaybackState::Error, std::memory_order_relaxed);
                     return;
                 }
 
                 net::HttpClient stream_http;
                 bool decoder_started = false;
+                bool write_failed = false;
 
-                auto on_chunk = [this, &out_file, &decoder_started, &stop_tok, track_id](const char* data, size_t size) -> bool {
+                auto on_chunk = [this, &out_file, &decoder_started, &write_failed, &stop_tok, &temp_path, track_id](const char* data, size_t size) -> bool {
                     if (stop_tok.stop_requested() || cancel_download.load(std::memory_order_relaxed)) {
                         return false;
                     }
 
                     out_file.write(data, static_cast<std::streamsize>(size));
                     out_file.flush();
+                    if (!out_file) {
+                        write_failed = true;
+                        return false;
+                    }
                     bytes_downloaded.fetch_add(size, std::memory_order_relaxed);
 
-                    size_t expected = total_bytes_expected.load(std::memory_order_relaxed);
+                    const size_t expected = total_bytes_expected.load(std::memory_order_relaxed);
                     if (expected > 0) {
-                        float pct = (static_cast<float>(bytes_downloaded.load(std::memory_order_relaxed)) / static_cast<float>(expected)) * 100.0f;
+                        const float pct = (static_cast<float>(bytes_downloaded.load(std::memory_order_relaxed)) / static_cast<float>(expected)) * 100.0f;
                         buffer_percent.store(std::min(100.0f, pct), std::memory_order_relaxed);
                     }
 
                     if (!decoder_started && bytes_downloaded.load(std::memory_order_relaxed) >= 98304) {
-                        ma_decoder_config decoder_cfg = ma_decoder_config_init(ma_format_f32, 2, 48000);
-                        if (ma_decoder_init_file(current_file_path.c_str(), &decoder_cfg, &decoder) == MA_SUCCESS) {
-                            decoder_initialized = true;
-                            decoder_started = true;
+                        decoder_started = initialize_decoder_file(temp_path);
+                        if (decoder_started) {
                             state.store(PlaybackState::Playing, std::memory_order_relaxed);
                             LOG_INFO("AudioEngine", "Playback started for progressive track " + std::to_string(track_id));
                         }
@@ -611,15 +653,33 @@ struct AudioEngine::Impl {
 
                 auto res = stream_http.get_stream(stream_url, on_chunk);
                 out_file.close();
-
-                if (cancel_download.load(std::memory_order_relaxed)) {
+                const bool cancelled = stop_tok.stop_requested() || cancel_download.load(std::memory_order_relaxed);
+                std::error_code ec;
+                const auto size = std::filesystem::file_size(temp_path, ec);
+                if (cancelled) {
+                    std::filesystem::remove(temp_path, ec);
+                    return;
+                }
+                if (!res || !res->is_2xx() || write_failed || !out_file || ec || size <= 1024) {
+                    LOG_ERROR("AudioEngine", "Progressive audio download failed or was incomplete");
+                    state.store(PlaybackState::Error, std::memory_order_relaxed);
+                    std::filesystem::remove(temp_path, ec);
                     return;
                 }
 
-                if (res && res->headers.count("Content-Length")) {
-                    try {
-                        total_bytes_expected.store(std::stoul(res->headers["Content-Length"]), std::memory_order_relaxed);
-                    } catch (...) {}
+                if (!decoder_started && !initialize_decoder_file(temp_path)) {
+                    LOG_ERROR("AudioEngine", "ma_decoder_init_file failed on " + temp_path);
+                    state.store(PlaybackState::Error, std::memory_order_relaxed);
+                    std::filesystem::remove(temp_path, ec);
+                    return;
+                }
+
+                std::filesystem::rename(temp_path, final_path, ec);
+                if (ec) {
+                    LOG_ERROR("AudioEngine", "Failed to publish downloaded audio file: " + ec.message());
+                    state.store(PlaybackState::Error, std::memory_order_relaxed);
+                    std::filesystem::remove(temp_path, ec);
+                    return;
                 }
 
                 download_finished.store(true, std::memory_order_relaxed);
@@ -627,18 +687,7 @@ struct AudioEngine::Impl {
                 if (cache_manager) {
                     cache_manager->register_track(track_id);
                 }
-
-                if (!decoder_started && bytes_downloaded.load(std::memory_order_relaxed) > 0) {
-                    ma_decoder_config decoder_cfg = ma_decoder_config_init(ma_format_f32, 2, 48000);
-                    if (ma_decoder_init_file(current_file_path.c_str(), &decoder_cfg, &decoder) == MA_SUCCESS) {
-                        decoder_initialized = true;
-                        state.store(PlaybackState::Playing, std::memory_order_relaxed);
-                        LOG_INFO("AudioEngine", "Playback started for track " + std::to_string(track_id));
-                    } else {
-                        LOG_ERROR("AudioEngine", "ma_decoder_init_file failed on " + current_file_path);
-                        state.store(PlaybackState::Error, std::memory_order_relaxed);
-                    }
-                }
+                state.store(PlaybackState::Playing, std::memory_order_relaxed);
             });
         }
     }
@@ -717,8 +766,11 @@ core::Result<void> AudioEngine::init() {
                     if (impl_->is_playing_drm.load(std::memory_order_relaxed)) {
                         if (impl_->drm_daemon) impl_->drm_daemon->resume();
                         impl_->state.store(PlaybackState::Playing, std::memory_order_relaxed);
-                    } else if (impl_->decoder_initialized) {
-                        impl_->state.store(PlaybackState::Playing, std::memory_order_relaxed);
+                    } else {
+                        std::lock_guard<std::mutex> lock(impl_->decoder_mutex);
+                        if (impl_->decoder_initialized) {
+                            impl_->state.store(PlaybackState::Playing, std::memory_order_relaxed);
+                        }
                     }
                     break;
                 case AudioCommandType::TogglePause:
@@ -745,8 +797,11 @@ core::Result<void> AudioEngine::init() {
                     }
                     impl_->state.store(PlaybackState::Stopped, std::memory_order_relaxed);
                     impl_->cancel_download = true;
-                    if (impl_->decoder_initialized) {
-                        ma_decoder_seek_to_pcm_frame(&impl_->decoder, 0);
+                    {
+                        std::lock_guard<std::mutex> lock(impl_->decoder_mutex);
+                        if (impl_->decoder_initialized) {
+                            ma_decoder_seek_to_pcm_frame(&impl_->decoder, 0);
+                        }
                     }
                     impl_->position_ms.store(0, std::memory_order_relaxed);
                     break;
@@ -787,7 +842,7 @@ core::Result<void> AudioEngine::init() {
 void AudioEngine::shutdown() {
     AudioCommand cmd;
     cmd.type = AudioCommandType::Shutdown;
-    impl_->command_queue.push(cmd);
+    impl_->enqueue_command(std::move(cmd));
     impl_->shutdown_engine();
 }
 
@@ -798,52 +853,52 @@ void AudioEngine::play(const std::string& stream_url, uint64_t track_id, uint64_
     cmd.track_id = track_id;
     cmd.duration_ms = duration_ms;
     cmd.is_drm = is_drm;
-    impl_->command_queue.push(cmd);
+    impl_->enqueue_command(std::move(cmd));
 }
 
 void AudioEngine::pause() {
     AudioCommand cmd;
     cmd.type = AudioCommandType::Pause;
-    impl_->command_queue.push(cmd);
+    impl_->enqueue_command(std::move(cmd));
 }
 
 void AudioEngine::resume() {
     AudioCommand cmd;
     cmd.type = AudioCommandType::Resume;
-    impl_->command_queue.push(cmd);
+    impl_->enqueue_command(std::move(cmd));
 }
 
 void AudioEngine::toggle_playback() {
     AudioCommand cmd;
     cmd.type = AudioCommandType::TogglePause;
-    impl_->command_queue.push(cmd);
+    impl_->enqueue_command(std::move(cmd));
 }
 
 void AudioEngine::stop() {
     AudioCommand cmd;
     cmd.type = AudioCommandType::Stop;
-    impl_->command_queue.push(cmd);
+    impl_->enqueue_command(std::move(cmd));
 }
 
 void AudioEngine::seek_relative(int64_t delta_ms) {
     AudioCommand cmd;
     cmd.type = AudioCommandType::SeekRelative;
     cmd.seek_delta_ms = delta_ms;
-    impl_->command_queue.push(cmd);
+    impl_->enqueue_command(std::move(cmd));
 }
 
 void AudioEngine::seek_absolute(uint64_t position_ms) {
     AudioCommand cmd;
     cmd.type = AudioCommandType::SeekAbsolute;
     cmd.seek_target_ms = position_ms;
-    impl_->command_queue.push(cmd);
+    impl_->enqueue_command(std::move(cmd));
 }
 
 void AudioEngine::set_volume(float volume_percent_0_to_150) {
     AudioCommand cmd;
     cmd.type = AudioCommandType::SetVolume;
     cmd.volume = volume_percent_0_to_150;
-    impl_->command_queue.push(cmd);
+    impl_->enqueue_command(std::move(cmd));
 }
 
 PlaybackState AudioEngine::get_state() const noexcept {

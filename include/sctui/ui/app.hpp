@@ -37,16 +37,26 @@ enum class AsyncEventType {
     PlaylistsReady,
     PlaylistTracksReady,
     StreamResolvedAndPlay,
+    PlayResolutionFailed,
     TrackFinished,
     WaveformReady,
     CoverArtReady,
     ErrorMessage,
     InfoMessage,
     ClientIdResolved,
+    TelemetryReady,
+    MprisPlay,
+    MprisPause,
     MprisNext,
     MprisPrevious,
     MprisPlayPause,
     MprisStop,
+    MprisSeekRelative,
+    MprisSeekAbsolute,
+    MprisSetVolume,
+    MprisSetShuffle,
+    MprisSetLoopStatus,
+    RequestExit,
     UserProfileReady,
     UserTracksReady,
     ElectronDownloadStarted,
@@ -61,6 +71,14 @@ struct AsyncUIEvent {
     std::vector<models::Playlist> playlists_payload{};
     std::vector<float> waveform_payload{};
     uint64_t numeric_payload{0};
+    uint64_t secondary_numeric_payload{0};
+    uint64_t tertiary_numeric_payload{0};
+    int64_t signed_numeric_payload{0};
+    float float_payload{0.0f};
+    bool bool_payload{false};
+    audio::PlaybackState playback_state_payload{audio::PlaybackState::Stopped};
+    std::array<float, audio::VisualizerBandsCount> visualizer_bars_payload{};
+    core::RepeatMode repeat_mode_payload{core::RepeatMode::Off};
     models::CoverArtImage cover_art_payload{};
     models::ColorRGB accent_color_payload{255, 85, 0};
     models::UserProfile profile_payload{};
@@ -68,7 +86,7 @@ struct AsyncUIEvent {
 
 class App {
 public:
-    explicit App(core::Config config);
+    explicit App(core::Config config, std::string initial_search_query = {});
     ~App();
 
     App(const App&) = delete;
@@ -142,10 +160,13 @@ private:
     core::ThreadPool thread_pool_{6};
     std::atomic<uint64_t> likes_fetch_generation_{0};
     std::atomic<uint64_t> play_generation_{0};
+    std::atomic<uint64_t> search_generation_{0};
+    std::atomic<uint64_t> playlist_generation_{0};
     std::atomic<bool> is_track_loading_{false};
     std::jthread worker_thread_;
     std::jthread telemetry_thread_;
     std::string last_search_query_;
+    std::string initial_search_query_;
     bool avatar_drawn_in_terminal_{false};
     bool fullscreen_cover_drawn_{false};
     bool queue_source_is_likes_{false};
@@ -153,6 +174,7 @@ private:
     std::unordered_map<uint64_t, std::vector<models::Track>> playlist_session_cache_;
     std::jthread likes_download_thread_;
     std::string likes_resume_href_;
+    std::function<void(bool, const std::string&)> onboarding_electron_callback_;
     std::atomic<bool> likes_fully_fetched_{false};
 };
 

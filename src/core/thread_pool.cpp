@@ -1,4 +1,7 @@
 #include "sctui/core/thread_pool.hpp"
+#include "sctui/core/logger.hpp"
+
+#include <exception>
 
 namespace sctui::core {
 
@@ -30,7 +33,13 @@ ThreadPool::ThreadPool(size_t num_threads) {
                 }
 
                 if (task) {
-                    task();
+                    try {
+                        task();
+                    } catch (const std::exception& e) {
+                        LOG_ERROR("ThreadPool", "Background task failed: " + std::string(e.what()));
+                    } catch (...) {
+                        LOG_ERROR("ThreadPool", "Background task failed with an unknown exception");
+                    }
                 }
             }
         });
@@ -42,21 +51,23 @@ ThreadPool::~ThreadPool() {
 }
 
 void ThreadPool::enqueue(std::function<void()> task) {
-    if (stop_.load(std::memory_order_relaxed)) {
-        return;
-    }
-
     {
         std::lock_guard<std::mutex> lock(queue_mutex_);
+        if (stop_.load(std::memory_order_relaxed)) {
+            return;
+        }
         tasks_.push(std::move(task));
     }
     cv_.notify_one();
 }
 
 void ThreadPool::shutdown() {
-    bool expected = false;
-    if (!stop_.compare_exchange_strong(expected, true)) {
-        return;
+    {
+        std::lock_guard<std::mutex> lock(queue_mutex_);
+        bool expected = false;
+        if (!stop_.compare_exchange_strong(expected, true)) {
+            return;
+        }
     }
 
     cv_.notify_all();

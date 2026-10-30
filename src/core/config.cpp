@@ -1,6 +1,11 @@
 #include "sctui/core/config.hpp"
 #include <fstream>
 #include <cstdlib>
+#include <cerrno>
+#include <cstring>
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <unistd.h>
 #include <nlohmann/json.hpp>
 
 namespace sctui::core {
@@ -228,12 +233,48 @@ Result<void> Config::save(const std::filesystem::path& path) const {
         j["onboarding_completed"] = onboarding_completed;
         j["cache_dir"] = cache_dir;
 
-        std::ofstream file(path);
-        if (!file.is_open()) {
-            return MakeError(ErrorCode::InvalidConfig, "Cannot open config file for writing: " + path.string());
+        const std::string contents = j.dump(4) + "\n";
+        std::filesystem::path temp_path = path;
+        temp_path += ".tmp";
+
+        int fd = ::open(temp_path.c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW, 0600);
+        if (fd < 0) {
+            return MakeError(ErrorCode::InvalidConfig, "Cannot open temporary config file: " + std::string(std::strerror(errno)));
+        }
+        if (::fchmod(fd, 0600) != 0) {
+            ::close(fd);
+            std::error_code ec;
+            std::filesystem::remove(temp_path, ec);
+            return MakeError(ErrorCode::InvalidConfig, "Cannot restrict temporary config file permissions");
         }
 
-        file << j.dump(4) << std::endl;
+        size_t offset = 0;
+        bool write_ok = true;
+        while (offset < contents.size()) {
+            ssize_t written = ::write(fd, contents.data() + offset, contents.size() - offset);
+            if (written > 0) {
+                offset += static_cast<size_t>(written);
+            } else if (written < 0 && errno == EINTR) {
+                continue;
+            } else {
+                write_ok = false;
+                break;
+            }
+        }
+        if (::fsync(fd) != 0) write_ok = false;
+        if (::close(fd) != 0) write_ok = false;
+        if (!write_ok) {
+            std::error_code ec;
+            std::filesystem::remove(temp_path, ec);
+            return MakeError(ErrorCode::InvalidConfig, "Failed to write temporary config file: " + temp_path.string());
+        }
+
+        std::error_code ec;
+        std::filesystem::rename(temp_path, path, ec);
+        if (ec) {
+            std::filesystem::remove(temp_path, ec);
+            return MakeError(ErrorCode::InvalidConfig, "Failed to replace config file: " + path.string());
+        }
         return Ok();
     } catch (const std::exception& e) {
         return MakeError(ErrorCode::InvalidConfig, std::string("Failed to save config: ") + e.what());

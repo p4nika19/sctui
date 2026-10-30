@@ -17,6 +17,13 @@
     let source = null;
     let spectrumTimer = null;
 
+    function isBenignPlayAbort(err) {
+      if (!err) return false;
+      if (err.name === 'AbortError') return true;
+      const msg = String(err.message || err);
+      return msg.includes('interrupted by a new load request') || msg.includes('interrupted by a call to pause');
+    }
+
     function ensureAudioContext() {
       if (audioCtx) return;
       try {
@@ -171,13 +178,6 @@
             hls.loadSource(streamUrl);
             hls.attachMedia(audio);
 
-            const isBenignPlayAbort = (err) => {
-              if (!err) return false;
-              if (err.name === 'AbortError') return true;
-              const msg = String(err.message || err);
-              return msg.includes('interrupted by a new load request') || msg.includes('interrupted by a call to pause');
-            };
-
             hls.on(window.Hls.Events.MANIFEST_PARSED, () => {
               ensureAudioContext();
               audio.volume = currentVolume;
@@ -237,9 +237,21 @@
 
       window.sctuiBridge.onCommand('cmd-resume', () => {
         try {
-          audio.play();
-          startSpectrum();
-        } catch (e) {}
+          const playPromise = audio.play();
+          if (playPromise !== undefined) {
+            playPromise.then(startSpectrum).catch((err) => {
+              if (isBenignPlayAbort(err)) return;
+              window.sctuiBridge.sendEvent({
+                type: 'error',
+                message: err ? err.message : 'Audio resume rejected'
+              });
+            });
+          } else {
+            startSpectrum();
+          }
+        } catch (e) {
+          window.sctuiBridge.sendEvent({ type: 'error', message: e.message });
+        }
       });
 
       window.sctuiBridge.onCommand('cmd-seek', (posMs) => {
